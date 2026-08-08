@@ -299,6 +299,49 @@ class TestCorpusContract(unittest.TestCase):
             corpus.load(self._corpus("[repo\n"))
         self.assertIn(corpus.MARKER, str(ctx.exception))
 
+    def test_resetting_the_work_directory_empties_it(self):
+        root = self._corpus(NEWSRC)
+        c = corpus.load(root)
+        work = c.work_dir
+        work.mkdir()
+        (work / "msg-04.md").write_text("yesterday's fourth message", encoding="utf-8")
+        (work / "triage.json").write_text("[]", encoding="utf-8")
+        returned = c.reset_work_dir()
+        self.assertEqual(returned, work)
+        self.assertTrue(work.is_dir())
+        self.assertEqual(list(work.iterdir()), [])
+
+    def test_resetting_creates_the_directory_when_absent(self):
+        c = corpus.load(self._corpus(NEWSRC))
+        self.assertFalse(c.work_dir.exists())
+        c.reset_work_dir()
+        self.assertTrue(c.work_dir.is_dir())
+
+    def test_reset_refuses_a_root_that_is_not_a_corpus(self):
+        """It deletes a tree. Checking work_dir against root proves nothing —
+        the pair is consistent for any root, including "/". What must hold is
+        that the evidence which justified operating here is still on disk."""
+        import dataclasses
+
+        c = corpus.load(self._corpus(NEWSRC))
+        elsewhere = Path(tempfile.mkdtemp())
+        (elsewhere / "please-keep-me").write_text("x", encoding="utf-8")
+        with self.assertRaises(corpus.CorpusError):
+            dataclasses.replace(c, root=elsewhere).reset_work_dir()
+        self.assertTrue((elsewhere / "please-keep-me").exists())
+
+    def test_reset_refuses_a_corpus_whose_marker_has_gone(self):
+        c = corpus.load(self._corpus(NEWSRC))
+        (c.root / corpus.MARKER).unlink()
+        with self.assertRaises(corpus.CorpusError):
+            c.reset_work_dir()
+
+    def test_reset_refuses_when_the_path_is_a_file(self):
+        c = corpus.load(self._corpus(NEWSRC))
+        c.work_dir.write_text("not a directory", encoding="utf-8")
+        with self.assertRaises(corpus.CorpusError):
+            c.reset_work_dir()
+
     def test_discover_does_not_walk_upwards(self):
         root = self._corpus(NEWSRC)
         child = root / "config"
@@ -1503,6 +1546,26 @@ enabled = false
             sys.argv = argv
         _, stats = self._outputs()
         self.assertNotIn("alpha", stats["saturated_sources"])
+
+    def test_a_run_starts_from_an_empty_work_directory(self):
+        """Yesterday's fourth message must not survive into a run that
+        produces two — the failure that made this structural."""
+        work = self.root / ".news-digest-work"
+        work.mkdir()
+        stale = work / "msg-04.md"
+        stale.write_text("yesterday's fourth message", encoding="utf-8")
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self._run()
+        self.assertFalse(stale.exists())
+
+    def test_keep_work_leaves_a_failed_run_readable(self):
+        work = self.root / ".news-digest-work"
+        work.mkdir()
+        kept = work / "triage.json"
+        kept.write_text("[]", encoding="utf-8")
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self._run("--keep-work")
+        self.assertTrue(kept.exists())
 
     def test_selecting_one_source_collects_only_that_one(self):
         self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})

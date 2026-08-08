@@ -126,6 +126,10 @@ def main() -> int:
         "--no-conditional", action="store_true",
         help="ignore stored validators and re-download every source",
     )
+    parser.add_argument(
+        "--keep-work", action="store_true",
+        help="do not clear the work directory first (to inspect a previous run)",
+    )
     args = parser.parse_args()
 
     try:
@@ -142,6 +146,13 @@ def main() -> int:
     if not chosen:
         print("ERROR: no sources selected", file=sys.stderr)
         return 2
+
+    if not args.keep_work:
+        # A run starts from an empty scratch directory. Anything left by the
+        # last one is either already persisted or was abandoned, and either way
+        # must not be mistaken for this run's output.
+        cleared = corpus.reset_work_dir()
+        print(f"work directory cleared: {cleared}", file=sys.stderr)
 
     store = state_lib.Store.load(corpus.state_file)
     client = http.HttpClient()

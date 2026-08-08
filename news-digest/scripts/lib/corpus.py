@@ -10,6 +10,7 @@ Standard library only.
 
 from __future__ import annotations
 
+import shutil
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,9 @@ SCHEMA_VERSIONS = frozenset({1})
 SCHEMA_WRITE_VERSION = 1
 
 MARKER = ".newsrc.toml"
+
+# Scratch for one run, inside the corpus and gitignored there.
+WORK_DIRNAME = ".news-digest-work"
 
 
 class CorpusError(Exception):
@@ -93,6 +97,36 @@ class Corpus:
 
     def seen_files(self) -> list[Path]:
         return sorted(self.index_dir.glob("seen-*.tsv"))
+
+    @property
+    def work_dir(self) -> Path:
+        return self.root / WORK_DIRNAME
+
+    def reset_work_dir(self) -> Path:
+        """Empty the scratch directory and return it.
+
+        Called at the *start* of a run rather than the end. A run that dies
+        halfway leaves its files to be read, and the next run clears them —
+        which keeps the debugging value while making it impossible to pick up
+        a previous run's artefact. Removing them at the end instead was an
+        instruction in prose, and prose instructions get skipped.
+        """
+        work = self.work_dir
+        # This deletes a directory tree. `work_dir` is derived from `root`, so
+        # checking them against each other proves nothing — the pair is
+        # consistent for any root at all, including "/". What is worth
+        # checking is that the root is still a corpus: the same evidence that
+        # justified operating here in the first place must be on disk now.
+        if not (self.root / MARKER).is_file():
+            raise CorpusError(
+                f"refusing to clear {work}: {self.root} is not a corpus (no {MARKER})"
+            )
+        if work.exists():
+            if not work.is_dir():
+                raise CorpusError(f"{work} exists and is not a directory")
+            shutil.rmtree(work)
+        work.mkdir(parents=True)
+        return work
 
     def article_file(self, published_date: str) -> Path:
         """`published_date` is `YYYY-MM-DD`."""

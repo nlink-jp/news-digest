@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-08-08
+
+### Changed
+
+- A run now clears its work directory before collecting, instead of being
+  told to remove it afterwards. The cleanup was an instruction in prose, and
+  the first unattended run skipped it — leaving eighteen files, including
+  message parts from an earlier, longer split. Clearing at the start rather
+  than the end also keeps a failed run's files readable until the next run
+  replaces them, so the debugging value survives. `--keep-work` opts out.
+- The guard on that deletion checks that the root still holds a `.newsrc.toml`
+  rather than checking the work directory against the root. The latter proves
+  nothing: the two are derived from each other and stay consistent for any
+  root at all, including `/`. Tying the destructive step to the evidence that
+  justified operating on the corpus is the check worth having.
+
 ## [0.2.0] - 2026-08-08
 
 ### Added

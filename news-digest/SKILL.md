@@ -91,7 +91,7 @@ that `config/` satisfies the profile's requirements.
   look like a normal result.
 - `WARNING` may proceed, but include it in the final report.
 
-Then `mkdir -p REPO/.news-digest-work`.
+`collect.py` creates `WORK` in the next phase; nothing to do here.
 
 ## Phase 1 — Collect
 
@@ -286,7 +286,8 @@ Do not commit `config/` unless you changed it deliberately — it is the
 human's area. If the push fails because the remote moved ahead, report it;
 do not force.
 
-Finally, `rm -rf REPO/.news-digest-work`.
+Leave `WORK` in place. The next run clears it before collecting, so the files
+from a run that failed halfway stay readable until they are replaced.
 
 ## Phase 9 — Report
 
