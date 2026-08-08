@@ -27,7 +27,11 @@ import collect  # noqa: E402
 import collectors  # noqa: E402
 import apply_table  # noqa: E402
 import build_digest  # noqa: E402
+import check_config  # noqa: E402
 import compile as compile_mod  # noqa: E402
+import parse_args  # noqa: E402
+import to_notify  # noqa: E402
+import validate  # noqa: E402
 import merge  # noqa: E402
 import prefilter  # noqa: E402
 from lib import corpus, http, profile, records  # noqa: E402
@@ -2328,6 +2332,325 @@ class TestCompile(unittest.TestCase):
         out = compile_mod.render(self._digest())
         self.assertTrue(out.endswith("\n"))
         self.assertFalse(out.endswith("\n\n"))
+
+
+# ────────────────────────────────────────────────────────────────
+# The narrative the agent writes
+# ────────────────────────────────────────────────────────────────
+
+
+class TestValidateNarrative(unittest.TestCase):
+    def setUp(self):
+        self.prof = profile.load(PROFILES, "generic")
+        self.scored = [
+            {"id": "sha1:1", "priority": "must_read"},
+            {"id": "sha1:2", "priority": "skim"},
+        ]
+
+    def _check(self, narrative):
+        return validate.check(narrative, self.scored, self.prof)
+
+    def _good(self, **kw):
+        base = {
+            "items": [{"id": "sha1:1", "summary": "Three sentences of body.", "deep_read": True}],
+            "natural_language_summary": "One consequential item today, plus routine coverage.",
+            "anomalies": [],
+        }
+        base.update(kw)
+        return base
+
+    def test_a_complete_narrative_passes(self):
+        self.assertEqual(self._check(self._good()), [])
+
+    def test_an_object_keyed_by_id_is_accepted_too(self):
+        narrative = self._good(
+            items={"sha1:1": {"summary": "Three sentences of body.", "deep_read": True}}
+        )
+        self.assertEqual(self._check(narrative), [])
+
+    def test_a_must_read_with_no_entry_is_reported(self):
+        """The failure is silent otherwise: the digest is structurally perfect
+        and missing the summaries the reader wanted."""
+        problems = self._check(self._good(items=[]))
+        self.assertTrue(any("sha1:1" in p for p in problems))
+
+    def test_a_summary_without_a_body_read_is_refused(self):
+        narrative = self._good(
+            items=[{"id": "sha1:1", "summary": "Sounds bad.", "deep_read": False}],
+            anomalies=[{"kind": "fetch_failed", "detail": "403"}],
+        )
+        problems = self._check(narrative)
+        self.assertTrue(any("guess" in p for p in problems))
+
+    def test_an_unread_must_read_needs_an_anomaly_explaining_why(self):
+        narrative = self._good(
+            items=[{"id": "sha1:1", "summary": None, "deep_read": False}], anomalies=[]
+        )
+        self.assertTrue(any("anomaly" in p for p in self._check(narrative)))
+
+    def test_an_unread_must_read_with_an_anomaly_passes(self):
+        narrative = self._good(
+            items=[{"id": "sha1:1", "summary": None, "deep_read": False}],
+            anomalies=[{"kind": "fetch_failed", "source": "Alpha", "detail": "403 from the site"}],
+        )
+        self.assertEqual(self._check(narrative), [])
+
+    def test_deep_read_with_an_empty_summary_is_refused(self):
+        narrative = self._good(items=[{"id": "sha1:1", "summary": "  ", "deep_read": True}])
+        self.assertTrue(self._check(narrative))
+
+    def test_an_id_that_was_not_scored_is_reported(self):
+        narrative = self._good(
+            items=[
+                {"id": "sha1:1", "summary": "Body.", "deep_read": True},
+                {"id": "sha1:99", "summary": "Body.", "deep_read": True},
+            ]
+        )
+        self.assertTrue(any("sha1:99" in p for p in self._check(narrative)))
+
+    def test_an_empty_overview_is_refused(self):
+        problems = self._check(self._good(natural_language_summary="  "))
+        self.assertTrue(any("nothing notable" in p for p in problems))
+
+    def test_a_quiet_day_is_a_legitimate_overview(self):
+        narrative = self._good(
+            natural_language_summary="Nothing notable today; routine advisories only."
+        )
+        self.assertEqual(self._check(narrative), [])
+
+    def test_a_non_object_narrative_is_refused(self):
+        self.assertTrue(self._check(["not", "an", "object"]))
+
+
+class TestBuildDigestInputHandling(unittest.TestCase):
+    def test_an_unreadable_narrative_stops_the_build(self):
+        """Defaulting would produce a digest quietly missing its summaries."""
+        root = Path(tempfile.mkdtemp())
+        (root / corpus.MARKER).write_text(NEWSRC, encoding="utf-8")
+        work = root / ".work"
+        work.mkdir()
+        (work / "prefiltered.jsonl").write_text("", encoding="utf-8")
+        (work / "triage.json").write_text("[]", encoding="utf-8")
+        (work / "narrative.json").write_text("{broken", encoding="utf-8")
+        argv = sys.argv
+        sys.argv = [
+            "build_digest.py", "--repo", str(root), "--skill-dir", str(SKILL),
+            "--prefiltered", str(work / "prefiltered.jsonl"),
+            "--triage", str(work / "triage.json"),
+            "--narrative", str(work / "narrative.json"),
+            "--out", str(work / "digest.json"),
+        ]
+        try:
+            self.assertEqual(build_digest.main(), 2)
+        finally:
+            sys.argv = argv
+
+
+# ────────────────────────────────────────────────────────────────
+# Splitting for delivery
+# ────────────────────────────────────────────────────────────────
+
+
+class TestSplitMarkdown(unittest.TestCase):
+    def test_short_text_is_one_message(self):
+        self.assertEqual(to_notify.split_markdown("# Digest\n\nShort.", 3800), ["# Digest\n\nShort."])
+
+    def test_empty_text_produces_nothing(self):
+        self.assertEqual(to_notify.split_markdown("   ", 3800), [])
+
+    def test_splits_at_section_boundaries(self):
+        text = "# D\n\n" + "".join(f"## Section {i}\n\n{'x' * 400}\n\n" for i in range(5))
+        parts = to_notify.split_markdown(text, 1000)
+        self.assertGreater(len(parts), 1)
+        for part in parts[1:]:
+            self.assertTrue(part.lstrip().startswith("##"))
+
+    def test_never_begins_mid_item(self):
+        """A message opening with a fragment of a headline reads as
+        corruption, not as continuation."""
+        text = "# D\n\n## Must read\n\n" + "".join(
+            f"### Headline number {i}\n\n{'body ' * 60}\n\n" for i in range(6)
+        )
+        for part in to_notify.split_markdown(text, 900)[1:]:
+            self.assertTrue(part.lstrip().startswith(("#", "*")), part[:40])
+
+    def test_every_part_is_within_the_limit(self):
+        text = "# D\n\n" + "".join(f"### Item {i}\n\n{'x' * 200}\n\n" for i in range(40))
+        for part in to_notify.split_markdown(text, 1000):
+            self.assertLessEqual(len(part), 1000)
+
+    def test_an_unbreakable_block_is_cut_rather_than_rejected(self):
+        parts = to_notify.split_markdown("x" * 5000, 1000)
+        self.assertEqual(len(parts), 5)
+        self.assertTrue(all(len(p) <= 1000 for p in parts))
+
+    def test_nothing_is_lost_in_the_split(self):
+        text = "# D\n\n" + "".join(f"## S{i}\n\nbody{i}\n\n" for i in range(10))
+        joined = "".join(to_notify.split_markdown(text, 200))
+        for i in range(10):
+            self.assertIn(f"body{i}", joined)
+
+    def test_the_slack_limit_leaves_room_for_decoration(self):
+        self.assertLess(to_notify.limit_for("slack"), 4000)
+
+    def test_an_unknown_kind_falls_back_to_the_conservative_limit(self):
+        self.assertEqual(to_notify.limit_for("carrier-pigeon"), to_notify.DEFAULT_LIMIT)
+
+
+# ────────────────────────────────────────────────────────────────
+# Pre-flight check
+# ────────────────────────────────────────────────────────────────
+
+
+INTERESTS_OK = """
+[org]
+description = "A team that operates security tooling and advises customers on incidents."
+
+[topics]
+high = ["exploited vulnerabilities", "supply chain compromise"]
+"""
+
+
+class TestCheckConfig(unittest.TestCase):
+    def _corpus(self, *, interests=INTERESTS_OK, sources=None, filters=None, newsrc=NEWSRC):
+        root = Path(tempfile.mkdtemp())
+        (root / corpus.MARKER).write_text(newsrc, encoding="utf-8")
+        (root / "config").mkdir()
+        (root / "config" / "sources.toml").write_text(
+            sources if sources is not None else TestCollectEndToEnd.SOURCES, encoding="utf-8"
+        )
+        if filters is not None:
+            (root / "config" / "filters.toml").write_text(filters, encoding="utf-8")
+        if interests is not None:
+            (root / "config" / "interests.toml").write_text(interests, encoding="utf-8")
+        return root
+
+    def _run(self, root, *extra):
+        argv = sys.argv
+        sys.argv = ["check_config.py", "--repo", str(root), "--skill-dir", str(SKILL), *extra]
+        try:
+            return check_config.main()
+        finally:
+            sys.argv = argv
+
+    def test_a_well_formed_corpus_passes(self):
+        self.assertEqual(self._run(self._corpus()), 0)
+
+    def test_a_missing_relevance_profile_is_an_error(self):
+        """Relevance would be scored against nothing, and the output would
+        look entirely normal."""
+        self.assertEqual(self._run(self._corpus(interests=None)), 1)
+
+    def test_a_profile_requirement_that_is_absent_is_an_error(self):
+        self.assertEqual(self._run(self._corpus(interests="[topics]\nhigh = [\"x\"]\n")), 1)
+
+    def test_a_requirement_that_is_too_thin_is_an_error(self):
+        thin = '[org]\ndescription = "security"\n\n[topics]\nhigh = ["x"]\n'
+        self.assertEqual(self._run(self._corpus(interests=thin)), 1)
+
+    def test_an_empty_required_array_is_an_error(self):
+        empty = INTERESTS_OK.replace('high = ["exploited vulnerabilities", "supply chain compromise"]', "high = []")
+        self.assertEqual(self._run(self._corpus(interests=empty)), 1)
+
+    def test_a_broken_source_list_is_an_error(self):
+        self.assertEqual(self._run(self._corpus(sources='[[source]]\nid = "x"\n')), 1)
+
+    def test_every_source_disabled_is_an_error(self):
+        """A run with nothing to collect from would report a quiet day."""
+        disabled = """
+[[source]]
+id = "alpha"
+name = "Alpha"
+url = "https://alpha.example/feed"
+category = "security"
+lang = "en"
+tier = "primary"
+enabled = false
+"""
+        self.assertEqual(self._run(self._corpus(sources=disabled)), 1)
+
+    def test_a_filter_naming_a_missing_source_is_an_error(self):
+        broken = '[[rule]]\nid = "a"\nsources = ["ghost"]\ntitle_regex = ["x"]\n'
+        self.assertEqual(self._run(self._corpus(filters=broken)), 1)
+
+    def test_a_corpus_with_an_unsupported_version_cannot_be_read_at_all(self):
+        newsrc = NEWSRC.replace("schema_version = 1", "schema_version = 99")
+        self.assertEqual(self._run(self._corpus(newsrc=newsrc)), 2)
+
+    def test_no_destination_is_a_warning_not_an_error(self):
+        newsrc = NEWSRC.split("[[notify]]")[0]
+        self.assertEqual(self._run(self._corpus(newsrc=newsrc)), 0)
+
+
+# ────────────────────────────────────────────────────────────────
+# Argument parsing
+# ────────────────────────────────────────────────────────────────
+
+
+class TestParseArgs(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / corpus.MARKER).write_text(NEWSRC, encoding="utf-8")
+
+    def _plan(self, *args):
+        import contextlib
+        import io
+
+        argv = sys.argv
+        sys.argv = ["parse_args.py", "--skill-dir", str(SKILL), "--", "--repo", str(self.root), *args]
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                code = parse_args.main()
+        finally:
+            sys.argv = argv
+        return code, (json.loads(buffer.getvalue()) if code == 0 else None)
+
+    def test_defaults_post_and_commit(self):
+        code, plan = self._plan()
+        self.assertEqual(code, 0)
+        self.assertTrue(plan["post"])
+        self.assertTrue(plan["commit"])
+
+    def test_dry_run_is_the_union_of_both_suppressions(self):
+        _, plan = self._plan("--dry-run")
+        self.assertFalse(plan["post"])
+        self.assertFalse(plan["commit"])
+
+    def test_the_suppressions_are_independent(self):
+        _, plan = self._plan("--no-post")
+        self.assertFalse(plan["post"])
+        self.assertTrue(plan["commit"])
+
+    def test_sources_accumulate(self):
+        _, plan = self._plan("--source", "alpha", "--source", "beta")
+        self.assertEqual(plan["sources"], ["alpha", "beta"])
+
+    def test_the_plan_reports_the_active_profile(self):
+        _, plan = self._plan()
+        self.assertEqual(plan["profile"]["name"], "generic")
+        self.assertEqual(plan["profile"]["axes"], ["novelty", "significance", "relevance"])
+        self.assertTrue(Path(plan["profile"]["rubric_path"]).is_file())
+
+    def test_the_plan_carries_the_declared_destinations(self):
+        _, plan = self._plan()
+        self.assertEqual(plan["destinations"][0]["channel"], "C0XXXXXXXXX")
+
+    def test_an_unknown_argument_is_refused(self):
+        code, _ = self._plan("--turbo")
+        self.assertEqual(code, 2)
+
+    def test_an_unreadable_window_is_refused(self):
+        code, _ = self._plan("--since", "last Tuesday")
+        self.assertEqual(code, 2)
+
+    def test_a_directory_that_is_not_a_corpus_is_refused(self):
+        argv = sys.argv
+        sys.argv = ["parse_args.py", "--", "--repo", str(Path(tempfile.mkdtemp()))]
+        try:
+            self.assertEqual(parse_args.main(), 2)
+        finally:
+            sys.argv = argv
 
 
 if __name__ == "__main__":

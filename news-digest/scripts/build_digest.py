@@ -33,13 +33,28 @@ from lib import stories as stories_lib
 NOVELTY_AXIS = "novelty"
 
 
-def read_json(path: Path | None, default: Any) -> Any:
-    if path is None or not Path(path).is_file():
+class InputError(Exception):
+    """An artefact that was named but cannot be read."""
+
+
+def read_json(path: Path | None, default: Any, *, required: bool = False) -> Any:
+    """Read an artefact, or fall back.
+
+    A file that was named on the command line but cannot be parsed raises
+    rather than falling back. Defaulting there would produce a digest that is
+    structurally perfect and quietly missing whatever that file held — the
+    summaries, most of the time.
+    """
+    if path is None:
+        return default
+    if not Path(path).is_file():
+        if required:
+            raise InputError(f"{path}: not found")
         return default
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InputError(f"{path}: {exc}") from exc
 
 
 def read_jsonl(path: Path | None) -> list[dict[str, Any]]:
@@ -198,12 +213,16 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
-    records = {r["id"]: r for r in read_jsonl(args.prefiltered)}
-    scored = read_json(args.triage, [])
-    narrative = read_json(args.narrative, {})
-    story_updates = read_json(args.story_updates, {"created": [], "updated": []})
-    prefilter_summary = read_json(args.prefilter_summary, {})
-    collect_stats = read_json(args.collect_stats, {})
+    try:
+        records = {r["id"]: r for r in read_jsonl(args.prefiltered)}
+        scored = read_json(args.triage, [], required=True)
+        narrative = read_json(args.narrative, {})
+        story_updates = read_json(args.story_updates, {"created": [], "updated": []})
+        prefilter_summary = read_json(args.prefilter_summary, {})
+        collect_stats = read_json(args.collect_stats, {})
+    except InputError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
     items = order(build_items(scored, records, narrative_index(narrative)), list(prof.axis_ids))
 
