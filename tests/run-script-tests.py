@@ -8,9 +8,11 @@ here.
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -21,8 +23,12 @@ FEEDS = REPO / "tests" / "fixtures" / "feeds"
 
 sys.path.insert(0, str(SCRIPTS))
 
+import collect  # noqa: E402
 import collectors  # noqa: E402
 from lib import corpus, http, profile, records  # noqa: E402
+from lib import sources as sources_lib  # noqa: E402
+from lib import state as state_lib  # noqa: E402
+from lib import window as window_lib  # noqa: E402
 
 
 def feed(name: str) -> bytes:
@@ -859,6 +865,528 @@ class TestHttpClient(unittest.TestCase):
                 with self.assertRaises(http.HttpError) as ctx:
                     client.get("https://example.com/f")
                 self.assertEqual(ctx.exception.kind, kind)
+
+
+# ────────────────────────────────────────────────────────────────
+# Source list
+# ────────────────────────────────────────────────────────────────
+
+
+SOURCE = """
+[[source]]
+id = "example"
+name = "Example"
+url = "https://example.com/feed"
+category = "security"
+lang = "en"
+tier = "primary"
+"""
+
+TYPES = ("rss", "jsonfeed")
+
+
+class TestSourceList(unittest.TestCase):
+    def _load(self, text: str):
+        tmp = Path(tempfile.mkdtemp()) / "sources.toml"
+        tmp.write_text(text, encoding="utf-8")
+        return sources_lib.load(tmp, TYPES)
+
+    def test_minimal_source_loads_with_defaults(self):
+        source = self._load(SOURCE)[0]
+        self.assertEqual(source.type, "rss")
+        self.assertEqual(source.weight, 1.0)
+        self.assertTrue(source.enabled)
+
+    def test_origin_is_a_copy_taken_at_collection_time(self):
+        source = self._load(SOURCE)[0]
+        origin = source.origin()
+        origin["source_name"] = "mutated"
+        self.assertEqual(source.origin()["source_name"], "Example")
+
+    def test_unknown_type_is_refused(self):
+        with self.assertRaises(sources_lib.SourceError):
+            self._load(SOURCE + 'type = "sitemap"\n')
+
+    def test_unknown_tier_is_refused(self):
+        with self.assertRaises(sources_lib.SourceError) as ctx:
+            self._load(SOURCE.replace('tier = "primary"', 'tier = "blog"'))
+        self.assertIn("primary", str(ctx.exception))
+
+    def test_non_http_url_is_refused(self):
+        with self.assertRaises(sources_lib.SourceError):
+            self._load(SOURCE.replace("https://example.com/feed", "file:///etc/passwd"))
+
+    def test_bad_id_is_refused(self):
+        with self.assertRaises(sources_lib.SourceError):
+            self._load(SOURCE.replace('id = "example"', 'id = "Example Feed"'))
+
+    def test_duplicate_ids_are_refused(self):
+        with self.assertRaises(sources_lib.SourceError):
+            self._load(SOURCE + SOURCE)
+
+    def test_a_typo_in_a_key_is_refused_rather_than_ignored(self):
+        """A silently ignored `weght = 2.0` is a setting the operator believes
+        is in effect."""
+        with self.assertRaises(sources_lib.SourceError) as ctx:
+            self._load(SOURCE + "weght = 2.0\n")
+        self.assertIn("weght", str(ctx.exception))
+
+    def test_zero_weight_is_refused_in_favour_of_disabling(self):
+        with self.assertRaises(sources_lib.SourceError):
+            self._load(SOURCE + "weight = 0\n")
+
+    def test_a_literal_token_is_refused(self):
+        text = SOURCE + '\n[source.auth]\ntoken_env = "X"\ntoken = "secret"\n'
+        with self.assertRaises(sources_lib.SourceError) as ctx:
+            self._load(text)
+        self.assertIn("environment variable", str(ctx.exception))
+
+    def test_auth_builds_a_header_from_the_environment(self):
+        import os
+
+        text = SOURCE + '\n[source.auth]\ntoken_env = "ND_TEST_TOKEN"\n'
+        source = self._load(text)[0]
+        os.environ["ND_TEST_TOKEN"] = "abc123"
+        try:
+            self.assertEqual(source.auth.resolve(), {"Authorization": "Bearer abc123"})
+        finally:
+            del os.environ["ND_TEST_TOKEN"]
+
+    def test_auth_without_the_environment_variable_fails_loudly(self):
+        text = SOURCE + '\n[source.auth]\ntoken_env = "ND_ABSENT_TOKEN"\n'
+        source = self._load(text)[0]
+        with self.assertRaises(sources_lib.SourceError):
+            source.auth.resolve()
+
+    def test_select_defaults_to_the_enabled_sources(self):
+        text = SOURCE + SOURCE.replace('id = "example"', 'id = "off"') + "enabled = false\n"
+        chosen, skipped = sources_lib.select(self._load(text), None)
+        self.assertEqual([s.id for s in chosen], ["example"])
+        self.assertEqual([s.id for s in skipped], ["off"])
+
+    def test_naming_a_disabled_source_overrides_enabled(self):
+        """Asking for a source by name and silently collecting nothing would
+        be a lie."""
+        text = SOURCE + SOURCE.replace('id = "example"', 'id = "off"') + "enabled = false\n"
+        chosen, _ = sources_lib.select(self._load(text), ["off"])
+        self.assertEqual([s.id for s in chosen], ["off"])
+
+    def test_naming_an_unknown_source_is_refused(self):
+        with self.assertRaises(sources_lib.SourceError):
+            sources_lib.select(self._load(SOURCE), ["nope"])
+
+
+# ────────────────────────────────────────────────────────────────
+# Window and gap detection
+# ────────────────────────────────────────────────────────────────
+
+
+class TestWindow(unittest.TestCase):
+    TZ = timezone(timedelta(hours=9))
+    NOW = datetime(2026, 8, 8, 10, 0, tzinfo=TZ)
+
+    def test_default_is_yesterday_midnight_until_now(self):
+        win = window_lib.resolve(None, None, tz=self.TZ, now=self.NOW)
+        self.assertEqual(win.since, datetime(2026, 8, 7, 0, 0, tzinfo=self.TZ))
+        self.assertEqual(win.until, self.NOW)
+
+    def test_a_bare_date_is_midnight_in_the_given_zone(self):
+        win = window_lib.resolve("2026-08-01", None, tz=self.TZ, now=self.NOW)
+        self.assertEqual(win.since, datetime(2026, 8, 1, 0, 0, tzinfo=self.TZ))
+
+    def test_an_explicit_offset_in_the_input_is_honoured(self):
+        win = window_lib.resolve("2026-08-01T00:00:00+00:00", None, tz=self.TZ, now=self.NOW)
+        self.assertEqual(win.since.utcoffset().total_seconds(), 0)
+
+    def test_all_means_no_lower_bound(self):
+        win = window_lib.resolve("all", None, tz=self.TZ, now=self.NOW)
+        self.assertIsNone(win.since)
+        self.assertTrue(win.contains(datetime(1999, 1, 1, tzinfo=timezone.utc)))
+
+    def test_window_is_half_open(self):
+        win = window_lib.resolve("2026-08-07", "2026-08-08", tz=self.TZ, now=self.NOW)
+        self.assertTrue(win.contains(datetime(2026, 8, 7, 0, 0, tzinfo=self.TZ)))
+        self.assertFalse(win.contains(datetime(2026, 8, 8, 0, 0, tzinfo=self.TZ)))
+
+    def test_an_undated_article_is_included(self):
+        """Feeds omit and mangle dates often enough that excluding them would
+        drop real articles silently."""
+        win = window_lib.resolve("2026-08-07", None, tz=self.TZ, now=self.NOW)
+        self.assertTrue(win.contains(None))
+
+    def test_an_empty_window_is_refused(self):
+        with self.assertRaises(window_lib.WindowError):
+            window_lib.resolve("2026-08-08", "2026-08-07", tz=self.TZ, now=self.NOW)
+
+    def test_an_unreadable_bound_is_refused(self):
+        with self.assertRaises(window_lib.WindowError):
+            window_lib.resolve("last Tuesday", None, tz=self.TZ, now=self.NOW)
+
+    def test_gap_is_detected_when_the_window_opens_after_the_last_article_seen(self):
+        win = window_lib.resolve("2026-08-07", None, tz=self.TZ, now=self.NOW)
+        self.assertTrue(window_lib.gap_before(win, "2026-08-01T00:00:00+09:00"))
+
+    def test_no_gap_when_the_window_overlaps_what_was_seen(self):
+        win = window_lib.resolve("2026-08-07", None, tz=self.TZ, now=self.NOW)
+        self.assertFalse(window_lib.gap_before(win, "2026-08-07T12:00:00+09:00"))
+
+    def test_no_gap_for_a_source_never_collected(self):
+        win = window_lib.resolve("2026-08-07", None, tz=self.TZ, now=self.NOW)
+        self.assertFalse(window_lib.gap_before(win, None))
+
+
+# ────────────────────────────────────────────────────────────────
+# Per-source state
+# ────────────────────────────────────────────────────────────────
+
+
+class TestSourceState(unittest.TestCase):
+    def test_last_seen_only_moves_forward(self):
+        """A feed briefly serving an older page must not rewind the marker
+        gap detection depends on."""
+        st = state_lib.SourceState()
+        st.record_success(fetched_at="t1", newest_published="2026-08-08T00:00:00+00:00")
+        st.record_success(fetched_at="t2", newest_published="2026-08-01T00:00:00+00:00")
+        self.assertEqual(st.last_seen_published_at, "2026-08-08T00:00:00+00:00")
+
+    def test_success_clears_the_error_streak(self):
+        st = state_lib.SourceState(consecutive_errors=3)
+        st.record_success(fetched_at="t", newest_published=None)
+        self.assertEqual(st.consecutive_errors, 0)
+
+    def test_not_modified_also_clears_the_streak(self):
+        st = state_lib.SourceState(consecutive_errors=2)
+        st.record_not_modified(fetched_at="t")
+        self.assertEqual(st.consecutive_errors, 0)
+        self.assertEqual(st.last_status, "not_modified")
+
+    def test_an_error_drops_the_validators(self):
+        """Replaying a stale ETag against a resource that moved would keep
+        answering 304 forever."""
+        st = state_lib.SourceState(etag='"v1"', last_modified="then")
+        st.record_error(fetched_at="t", kind="http_status")
+        self.assertIsNone(st.etag)
+        self.assertIsNone(st.last_modified)
+
+    def test_a_source_is_called_dead_only_after_a_streak(self):
+        st = state_lib.SourceState()
+        for _ in range(state_lib.DEAD_AFTER - 1):
+            st.record_error(fetched_at="t", kind="unreachable")
+        self.assertFalse(st.probably_dead)
+        st.record_error(fetched_at="t", kind="unreachable")
+        self.assertTrue(st.probably_dead)
+
+    def test_round_trips_through_the_file(self):
+        path = Path(tempfile.mkdtemp()) / "state" / "sources.json"
+        store = state_lib.Store(path)
+        store.get("a").record_success(fetched_at="t", newest_published="2026-08-08T00:00:00+00:00")
+        store.save()
+        again = state_lib.Store.load(path)
+        self.assertEqual(again.get("a").last_seen_published_at, "2026-08-08T00:00:00+00:00")
+
+    def test_a_corrupt_state_file_costs_one_refetch_not_the_run(self):
+        path = Path(tempfile.mkdtemp()) / "sources.json"
+        path.write_text("{not json", encoding="utf-8")
+        store = state_lib.Store.load(path)
+        self.assertEqual(store.get("a").etag, None)
+
+    def test_unknown_fields_in_a_newer_state_file_are_ignored(self):
+        path = Path(tempfile.mkdtemp()) / "sources.json"
+        path.write_text('{"a": {"etag": "x", "from_the_future": 1}}', encoding="utf-8")
+        self.assertEqual(state_lib.Store.load(path).get("a").etag, "x")
+
+
+# ────────────────────────────────────────────────────────────────
+# Collection
+# ────────────────────────────────────────────────────────────────
+
+
+class TestFetchSource(unittest.TestCase):
+    def _source(self, **kw):
+        base = dict(
+            id="example", name="Example", url="https://example.com/feed",
+            type="rss", category="security", lang="en", tier="primary",
+        )
+        base.update(kw)
+        return sources_lib.Source(**base)
+
+    def _client(self, *outcomes):
+        return http.HttpClient(opener=FakeOpener(*outcomes), sleep=lambda _: None)
+
+    def test_a_successful_fetch_yields_entries_and_validators(self):
+        client = self._client(
+            FakeResponse(feed("rss2.xml"), headers={"ETag": '"v1"'})
+        )
+        result = collect.fetch_source(self._source(), client, state_lib.SourceState())
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.fetched, 2)
+        self.assertEqual(result.etag, '"v1"')
+        self.assertEqual(result.newest_published, "2026-08-08T09:30:00+09:00")
+
+    def test_stored_validators_are_replayed(self):
+        opener = FakeOpener(FakeResponse(feed("rss2.xml")))
+        client = http.HttpClient(opener=opener, sleep=lambda _: None)
+        st = state_lib.SourceState(etag='"v1"')
+        collect.fetch_source(self._source(), client, st)
+        self.assertEqual(opener.requests[0].get_header("If-none-match"), '"v1"')
+
+    def test_no_conditional_ignores_stored_validators(self):
+        opener = FakeOpener(FakeResponse(feed("rss2.xml")))
+        client = http.HttpClient(opener=opener, sleep=lambda _: None)
+        st = state_lib.SourceState(etag='"v1"')
+        collect.fetch_source(self._source(), client, st, conditional=False)
+        self.assertIsNone(opener.requests[0].get_header("If-none-match"))
+
+    def test_304_is_reported_as_unchanged_not_as_empty(self):
+        result = collect.fetch_source(
+            self._source(), self._client(http_error(304)), state_lib.SourceState()
+        )
+        self.assertEqual(result.status, "not_modified")
+        self.assertEqual(result.fetched, 0)
+
+    def test_a_transport_failure_is_captured_rather_than_raised(self):
+        """One failing source must not stop the run."""
+        result = collect.fetch_source(
+            self._source(), self._client(http_error(500), http_error(500), http_error(500)),
+            state_lib.SourceState(),
+        )
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.error_kind, "http_status")
+
+    def test_an_unparseable_body_is_an_error_not_an_empty_feed(self):
+        result = collect.fetch_source(
+            self._source(), self._client(FakeResponse(b"<html>nope</html>")),
+            state_lib.SourceState(),
+        )
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.error_kind, "unparseable")
+
+    def test_the_declared_collector_is_used(self):
+        result = collect.fetch_source(
+            self._source(type="jsonfeed"), self._client(FakeResponse(feed("jsonfeed.json"))),
+            state_lib.SourceState(),
+        )
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.fetched, 2)
+
+    def test_the_source_language_is_requested(self):
+        opener = FakeOpener(FakeResponse(feed("rss2.xml")))
+        client = http.HttpClient(opener=opener, sleep=lambda _: None)
+        collect.fetch_source(self._source(lang="ja"), client, state_lib.SourceState())
+        self.assertIn("ja", opener.requests[0].get_header("Accept-language"))
+
+
+class TestRecordConstruction(unittest.TestCase):
+    def _source(self):
+        return sources_lib.Source(
+            id="example", name="Example", url="https://example.com/feed",
+            type="rss", category="security", lang="en", tier="primary", weight=1.5,
+        )
+
+    def test_a_record_carries_its_origin_and_both_addresses(self):
+        entry = collectors.get("rss").parse(feed("rss2.xml"))[0]
+        record = collect.to_record(entry, self._source(), "2026-08-08T00:00:00+00:00")
+        self.assertEqual(record["url"], "https://example.com/advisory/1?utm_source=rss")
+        self.assertEqual(record["canonical_key"], "example.com/advisory/1")
+        self.assertEqual(record["id"], records.article_id("example.com/advisory/1"))
+        self.assertEqual(record["origin"]["tier"], "primary")
+        self.assertEqual(record["origin"]["weight"], 1.5)
+        self.assertEqual(record["schema_version"], corpus.SCHEMA_WRITE_VERSION)
+
+    def test_the_tracking_parameter_survives_in_the_fetchable_url_only(self):
+        """The key is for comparison; the address is what gets fetched."""
+        entry = collectors.get("rss").parse(feed("rss2.xml"))[0]
+        record = collect.to_record(entry, self._source(), "t")
+        self.assertIn("utm_source", record["url"])
+        self.assertNotIn("utm_source", record["canonical_key"])
+
+
+class TestCollectEndToEnd(unittest.TestCase):
+    """Drives collect.main() over a temporary corpus with the network faked,
+    which is the only thing that proves the wiring."""
+
+    SOURCES = """
+[[source]]
+id = "alpha"
+name = "Alpha"
+url = "https://alpha.example/feed"
+category = "security"
+lang = "en"
+tier = "primary"
+
+[[source]]
+id = "beta"
+name = "Beta"
+url = "https://beta.example/feed.json"
+type = "jsonfeed"
+category = "tech"
+lang = "en"
+tier = "secondary"
+
+[[source]]
+id = "gone"
+name = "Gone"
+url = "https://gone.example/feed"
+category = "tech"
+lang = "en"
+tier = "community"
+
+[[source]]
+id = "off"
+name = "Disabled"
+url = "https://off.example/feed"
+category = "tech"
+lang = "en"
+tier = "community"
+enabled = false
+"""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / corpus.MARKER).write_text(NEWSRC, encoding="utf-8")
+        (self.root / "config").mkdir()
+        (self.root / "config" / "sources.toml").write_text(self.SOURCES, encoding="utf-8")
+        self.work = self.root / ".work"
+        self._real_client = collect.http.HttpClient
+
+    def tearDown(self):
+        collect.http.HttpClient = self._real_client
+
+    def _fake_network(self, by_host: dict):
+        class Router:
+            def open(self, request, timeout=None):
+                host = request.host if hasattr(request, "host") else ""
+                outcome = by_host.get(host.split(":")[0])
+                if outcome is None:
+                    raise http_error(404)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        collect.http.HttpClient = lambda *a, **kw: self._real_client(
+            *a, opener=Router(), sleep=lambda _: None, retries=0, **kw
+        )
+
+    def _run(self, *extra):
+        argv = sys.argv
+        sys.argv = [
+            "collect.py", "--repo", str(self.root),
+            "--since", "2026-08-01", "--until", "2026-08-09",
+            "--out", str(self.work / "collected.jsonl"),
+            "--stats-out", str(self.work / "stats.json"),
+            *extra,
+        ]
+        try:
+            return collect.main()
+        finally:
+            sys.argv = argv
+
+    def _outputs(self):
+        lines = (self.work / "collected.jsonl").read_text(encoding="utf-8").splitlines()
+        stats = json.loads((self.work / "stats.json").read_text(encoding="utf-8"))
+        return [json.loads(line) for line in lines], stats
+
+    def test_collects_across_source_types_and_reports_every_source(self):
+        self._fake_network({
+            "alpha.example": FakeResponse(feed("rss2.xml"), headers={"ETag": '"a1"'}),
+            "beta.example": FakeResponse(feed("jsonfeed.json")),
+        })
+        self.assertEqual(self._run(), 0)
+        articles, stats = self._outputs()
+
+        self.assertEqual(len(articles), 4)  # 2 rss + 2 jsonfeed
+        self.assertEqual(stats["totals"]["sources_ok"], 2)
+        self.assertEqual(stats["totals"]["sources_error"], 1)
+        self.assertEqual(stats["disabled_sources"], ["off"])
+        self.assertEqual(stats["errors"], ["gone"])
+        # Every selected source appears, whatever happened to it.
+        self.assertEqual({s["id"] for s in stats["sources"]}, {"alpha", "beta", "gone"})
+
+    def test_a_failing_source_does_not_stop_the_others(self):
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self.assertEqual(self._run(), 0)
+        articles, stats = self._outputs()
+        self.assertEqual(len(articles), 2)
+        self.assertEqual(sorted(stats["errors"]), ["beta", "gone"])
+
+    def test_records_carry_the_origin_of_the_source_that_produced_them(self):
+        self._fake_network({
+            "alpha.example": FakeResponse(feed("rss2.xml")),
+            "beta.example": FakeResponse(feed("jsonfeed.json")),
+        })
+        self._run()
+        articles, _ = self._outputs()
+        by_source = {}
+        for article in articles:
+            by_source.setdefault(article["origin"]["source_id"], []).append(article)
+        self.assertEqual(set(by_source), {"alpha", "beta"})
+        self.assertTrue(all(a["origin"]["collector"] == "rss" for a in by_source["alpha"]))
+        self.assertTrue(all(a["origin"]["tier"] == "secondary" for a in by_source["beta"]))
+
+    def test_state_is_written_and_replayed_on_the_next_run(self):
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"), headers={"ETag": '"a1"'})})
+        self._run()
+        st = state_lib.Store.load(self.root / "data" / "state" / "sources.json")
+        self.assertEqual(st.get("alpha").etag, '"a1"')
+        self.assertEqual(st.get("alpha").last_seen_published_at, "2026-08-08T09:30:00+09:00")
+        self.assertGreater(st.get("gone").consecutive_errors, 0)
+
+    def test_an_unchanged_source_is_reported_as_unchanged(self):
+        self._fake_network({"alpha.example": http_error(304)})
+        self._run()
+        _, stats = self._outputs()
+        alpha = next(s for s in stats["sources"] if s["id"] == "alpha")
+        self.assertEqual(alpha["status"], "not_modified")
+        self.assertEqual(stats["totals"]["sources_not_modified"], 1)
+        self.assertNotIn("alpha", stats["silent_sources"])
+
+    def test_a_source_that_returned_nothing_in_window_is_named(self):
+        """Distinct from unchanged: the feed answered and had nothing recent,
+        which is worth suspecting."""
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        argv = sys.argv
+        sys.argv = [
+            "collect.py", "--repo", str(self.root),
+            "--since", "2026-01-01", "--until", "2026-01-02",
+            "--out", str(self.work / "collected.jsonl"),
+            "--stats-out", str(self.work / "stats.json"),
+        ]
+        try:
+            collect.main()
+        finally:
+            sys.argv = argv
+        _, stats = self._outputs()
+        self.assertIn("alpha", stats["silent_sources"])
+
+    def test_a_gap_is_reported_when_the_window_opens_after_what_was_seen(self):
+        store = state_lib.Store(self.root / "data" / "state" / "sources.json")
+        store.get("alpha").last_seen_published_at = "2026-07-01T00:00:00+00:00"
+        store.save()
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self._run()
+        _, stats = self._outputs()
+        self.assertIn("alpha", stats["gaps"])
+
+    def test_selecting_one_source_collects_only_that_one(self):
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self.assertEqual(self._run("--source", "alpha"), 0)
+        _, stats = self._outputs()
+        self.assertEqual([s["id"] for s in stats["sources"]], ["alpha"])
+
+    def test_the_resolved_window_is_recorded(self):
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self._run()
+        _, stats = self._outputs()
+        self.assertTrue(stats["window"]["since"].startswith("2026-08-01"))
+
+    def test_a_corpus_without_a_marker_stops_before_touching_anything(self):
+        empty = Path(tempfile.mkdtemp())
+        argv = sys.argv
+        sys.argv = ["collect.py", "--repo", str(empty)]
+        try:
+            self.assertEqual(collect.main(), 2)
+        finally:
+            sys.argv = argv
 
 
 if __name__ == "__main__":
