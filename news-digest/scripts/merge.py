@@ -156,24 +156,34 @@ def main() -> int:
         print(f"dry run: {len(records)} article(s), {len(scored_by_id)} scored", file=sys.stderr)
         return 0
 
-    # --- articles ---
-    by_day: dict[str, list[dict[str, Any]]] = {}
-    for record in records:
-        by_day.setdefault(partition_date(record), []).append(record)
-    added = updated = 0
-    for day, rows in sorted(by_day.items()):
-        a, u = merge_articles(corpus.article_file(day), rows)
-        added += a
-        updated += u
-
     # --- stories ---
+    #
+    # Before the articles, because attaching an article to a story sets a
+    # field on the article. Writing the articles first and again afterwards
+    # would leave a window in which the corpus holds records whose story
+    # attachment has been reset to null.
     created: list[dict[str, Any]] = []
     touched: list[dict[str, Any]] = []
     minted: set[str] = set()
 
+    # Which story already holds each article. Without this, re-running mints a
+    # second story for every `new_story` in the input, because the request to
+    # create one is still there on the second pass — the corpus is what
+    # records that it was already honoured.
+    membership: dict[str, str] = {}
+    for story in stories_lib.read_all(corpus.stories_dir):
+        for member in story.get("article_ids") or []:
+            membership[str(member)] = story["id"]
+
     for verdict in scored:
         record = by_id[verdict["id"]]
         note = verdict.get("why", "")
+
+        if record["id"] in membership:
+            story_id = membership[record["id"]]
+            verdict["story_id"] = story_id
+            record["triage"]["story_id"] = story_id
+            continue
 
         new_story = verdict.get("new_story")
         if isinstance(new_story, dict) and new_story.get("title"):
@@ -193,6 +203,7 @@ def main() -> int:
             attach_to_story(story, record, note)
             write_story(corpus.stories_dir, story)
             created.append({"id": story_id, "title": story["title"], "article_id": record["id"]})
+            membership[record["id"]] = story_id
             verdict["story_id"] = story_id
             record["triage"]["story_id"] = story_id
             continue
@@ -211,13 +222,20 @@ def main() -> int:
             continue
         if attach_to_story(story, record, note):
             write_story(corpus.stories_dir, story)
+            membership[record["id"]] = story_id
             touched.append(
                 {"id": story_id, "title": story.get("title"), "article_id": record["id"]}
             )
 
-    # Story ids assigned above are part of the stored record.
+    # --- articles ---
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        by_day.setdefault(partition_date(record), []).append(record)
+    added = updated = 0
     for day, rows in sorted(by_day.items()):
-        merge_articles(corpus.article_file(day), rows)
+        a, u = merge_articles(corpus.article_file(day), rows)
+        added += a
+        updated += u
 
     # --- seen index ---
     by_year: dict[str, list[seen_lib.Row]] = {}

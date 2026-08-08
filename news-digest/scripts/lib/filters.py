@@ -181,10 +181,15 @@ def load(path: Path, known_sources: set[str] | None = None) -> Filters:
             )
         )
 
+    named = set(gate.sources)
+    for rule in rules:
+        named |= rule.selector.sources
+    if "*" in named:
+        raise FilterError(
+            f"{path}: 'sources = [\"*\"]' is not a wildcard. A rule with no selector "
+            f"already applies to every article — remove the line."
+        )
     if known_sources is not None:
-        named = set(gate.sources)
-        for rule in rules:
-            named |= rule.selector.sources
         unknown = sorted(named - known_sources)
         if unknown:
             raise FilterError(

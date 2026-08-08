@@ -929,6 +929,23 @@ class TestSourceList(unittest.TestCase):
         with self.assertRaises(sources_lib.SourceError):
             self._load(SOURCE.replace("https://example.com/feed", "file:///etc/passwd"))
 
+    def test_an_enabled_source_without_a_url_is_refused(self):
+        with self.assertRaises(sources_lib.SourceError):
+            self._load(SOURCE.replace('url = "https://example.com/feed"', 'url = ""'))
+
+    def test_a_disabled_source_may_have_no_url(self):
+        """It is never fetched, and the entry then records a feed that was
+        investigated and found not to work. Deleting it loses the finding."""
+        text = SOURCE.replace('url = "https://example.com/feed"', 'url = ""') + "enabled = false\n"
+        source = self._load(text)[0]
+        self.assertFalse(source.enabled)
+        self.assertEqual(source.url, "")
+
+    def test_a_disabled_source_with_a_malformed_url_is_still_refused(self):
+        text = SOURCE.replace("https://example.com/feed", "not-a-url") + "enabled = false\n"
+        with self.assertRaises(sources_lib.SourceError):
+            self._load(text)
+
     def test_bad_id_is_refused(self):
         with self.assertRaises(sources_lib.SourceError):
             self._load(SOURCE.replace('id = "example"', 'id = "Example Feed"'))
@@ -1984,6 +2001,37 @@ class TestMerge(unittest.TestCase):
         stored = {r["id"]: r for r in self._articles()}
         self.assertEqual(stored["sha1:0"]["triage"]["priority"], "must_read")
         self.assertIsNone(stored["sha1:1"].get("triage"))
+
+    def test_running_twice_with_a_new_story_changes_nothing(self):
+        """The request to create a story is still in the input on the second
+        pass; the corpus is what records that it was already honoured. Found
+        by a real run, which minted a second story every time it repeated."""
+        records = self._records()
+        scored = [self._verdict(new_story={"title": "Example Gateway intrusion"})]
+        self._run(records, scored)
+        first = {
+            p.relative_to(self.root): p.read_bytes()
+            for p in sorted(self.root.rglob("*")) if p.is_file() and ".work" not in str(p)
+        }
+        self._run(records, scored)
+        second = {
+            p.relative_to(self.root): p.read_bytes()
+            for p in sorted(self.root.rglob("*")) if p.is_file() and ".work" not in str(p)
+        }
+        self.assertEqual(sorted(first), sorted(second), "a second story file appeared")
+        self.assertEqual(first, second)
+        self.assertEqual(len(list(stories_lib.read_all(self.corpus.stories_dir))), 1)
+
+    def test_an_article_is_not_re_added_to_a_story_it_already_left_the_run_in(self):
+        records = self._records()
+        self._run(records, [self._verdict(new_story={"title": "Ongoing"})])
+        story_id = list(stories_lib.read_all(self.corpus.stories_dir))[0]["id"]
+        # A later run that still asks for a new story must reuse the existing
+        # attachment rather than starting a parallel thread for the same article.
+        self._run(records, [self._verdict(new_story={"title": "Ongoing (restated)"})])
+        stories = list(stories_lib.read_all(self.corpus.stories_dir))
+        self.assertEqual([s["id"] for s in stories], [story_id])
+        self.assertEqual(stories[0]["article_ids"], ["sha1:0"])
 
     def test_running_twice_changes_nothing(self):
         """A run that failed halfway must be safe to simply repeat."""

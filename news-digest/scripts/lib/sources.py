@@ -99,7 +99,10 @@ def _fail(where: str, message: str) -> None:
 def _parse_one(entry: Any, where: str, known_types: tuple[str, ...], default_type: str) -> Source:
     if not isinstance(entry, dict):
         _fail(where, "not a table")
-    for key in ("id", "name", "url", "category", "lang", "tier"):
+
+    enabled = bool(entry.get("enabled", True))
+
+    for key in ("id", "name", "category", "lang", "tier"):
         if not str(entry.get(key, "")).strip():
             _fail(where, f"missing or empty '{key}'")
 
@@ -107,8 +110,14 @@ def _parse_one(entry: Any, where: str, known_types: tuple[str, ...], default_typ
     if not ID_RE.match(source_id):
         _fail(where, f"id '{source_id}' must be lowercase letters, digits, and hyphens")
 
-    url = str(entry["url"]).strip()
-    if not url.startswith(("http://", "https://")):
+    # A disabled source is never fetched, so it may have no URL at all. That
+    # keeps an entry usable as the record of a feed that was investigated and
+    # found not to work — deleting it would lose the finding and invite the
+    # same investigation again. An enabled source still needs a real address.
+    url = str(entry.get("url", "")).strip()
+    if enabled and not url:
+        _fail(where, "missing or empty 'url'")
+    if url and not url.startswith(("http://", "https://")):
         _fail(where, f"url must be http(s), got {url!r}")
 
     source_type = str(entry.get("type", default_type)).strip() or default_type
@@ -155,7 +164,7 @@ def _parse_one(entry: Any, where: str, known_types: tuple[str, ...], default_typ
         lang=str(entry["lang"]).strip(),
         tier=tier,
         weight=weight,
-        enabled=bool(entry.get("enabled", True)),
+        enabled=enabled,
         accept_language=(str(entry["accept_language"]) if entry.get("accept_language") else None),
         note=str(entry.get("note", "")),
         auth=auth,
