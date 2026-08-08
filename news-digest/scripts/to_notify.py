@@ -127,6 +127,15 @@ def main() -> int:
 
     messages = split_markdown(compile_mod.render(digest), limit)
     args.out_prefix.parent.mkdir(parents=True, exist_ok=True)
+
+    # Clear parts left by an earlier invocation. The caller sends msg-01,
+    # msg-02, … in order, so a run that produces fewer parts than the last one
+    # would otherwise deliver stale messages after its own.
+    stale = 0
+    for existing in sorted(args.out_prefix.parent.glob(f"{args.out_prefix.name}-*.md")):
+        existing.unlink()
+        stale += 1
+
     written = []
     for i, message in enumerate(messages, start=1):
         path = args.out_prefix.with_name(f"{args.out_prefix.name}-{i:02d}.md")
@@ -148,7 +157,11 @@ def main() -> int:
             indent=2,
         )
     )
-    print(f"{len(written)} part(s) written; sending is not this script's job", file=sys.stderr)
+    cleared = f", {stale} stale part(s) removed" if stale else ""
+    print(
+        f"{len(written)} part(s) written{cleared}; sending is not this script's job",
+        file=sys.stderr,
+    )
     return 0
 
 

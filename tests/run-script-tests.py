@@ -2607,6 +2607,59 @@ class TestSplitMarkdown(unittest.TestCase):
         self.assertEqual(to_notify.limit_for("carrier-pigeon"), to_notify.DEFAULT_LIMIT)
 
 
+class TestToNotifyOutput(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / corpus.MARKER).write_text(NEWSRC, encoding="utf-8")
+        self.work = self.root / ".work"
+        self.work.mkdir()
+
+    def _digest(self, sections):
+        path = self.work / "digest.json"
+        path.write_text(
+            json.dumps(
+                {"date": "2026-08-08", "profile": "generic", "items_total": 0,
+                 "stats": {"by_priority": {}}, "sections": sections},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def _run(self, digest_path):
+        argv = sys.argv
+        sys.argv = [
+            "to_notify.py", str(digest_path), "--repo", str(self.root),
+            "--out-prefix", str(self.work / "msg"), "--limit", "600",
+        ]
+        try:
+            import contextlib
+            import io
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(to_notify.main(), 0)
+        finally:
+            sys.argv = argv
+        return sorted(p.name for p in self.work.glob("msg-*.md"))
+
+    def _long(self, n):
+        return [
+            {"id": f"s{i}", "title": f"Section {i}", "kind": "stale_topics",
+             "topics": [{"story_id": f"s{i}", "title": "T" * 200, "article_count": 1,
+                         "sources": [], "reason": "R" * 200}]}
+            for i in range(n)
+        ]
+
+    def test_stale_parts_from_an_earlier_run_are_removed(self):
+        """The caller sends msg-01, msg-02, … in order, so leftovers from a
+        longer previous run would be delivered after this run's own."""
+        many = self._run(self._digest(self._long(6)))
+        self.assertGreater(len(many), 2)
+        few = self._run(self._digest(self._long(1)))
+        self.assertLess(len(few), len(many))
+        self.assertEqual(few, sorted(p.name for p in self.work.glob("msg-*.md")))
+
+
 # ────────────────────────────────────────────────────────────────
 # Pre-flight check
 # ────────────────────────────────────────────────────────────────
