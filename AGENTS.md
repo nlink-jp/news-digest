@@ -34,17 +34,17 @@ news-digest/            The skill — the only thing `make package` ships
 ├── SKILL.md            Phase 0–9 pipeline; frontmatter name must equal the directory
 ├── references/
 │   └── data-model.md   Record shapes, identity rule, re-analysis queries
-├── scripts/lib/        corpus.py (.newsrc.toml contract, version gate),
-│                       profile.py (axes, extends chain, decision table),
-│                       records.py (identity and text normalization)
-├── scripts/collectors/ (next) rss / jsonfeed / html / json_api + shared HTTP layer
-├── scripts/            (next) parse_args, check_config, collect, prefilter,
-│                       apply_table, merge, build_digest, compile, to_notify, validate
+├── examples/corpus/    Ready-to-copy corpus template (placeholders only)
+├── scripts/lib/        corpus (contract + version gate), profile (axes,
+│                       extends chain, decision table), records (identity),
+│                       http (the only network access), sources, filters,
+│                       seen, stories, state, window, triage
+├── scripts/collectors/ rss (RSS 2.0 / Atom / RDF), jsonfeed. They parse; they
+│                       never fetch — see the gotcha below
 └── profiles/           generic; security-news extends it
 tests/
 ├── validate-skill.sh   Byte-identical vendored copy of .github/templates/ (ADR-006)
 └── run-script-tests.py Behaviour tests, hooked into the Makefile check target
-examples/config/        (P5) sanitized starting configuration — placeholders only
 docs/{en,ja}/adr/       Design records
 ```
 
@@ -78,10 +78,22 @@ public form is ADR-0001. Two copies of a design drift.
   dependency to the scripts.
 - **Standard library only.** Adding a dependency defeats the reason the tool
   exists.
+- **Collectors parse; `lib/http.py` fetches.** That split is what makes
+  conditional GET, the size cap, backoff, and the redirect policy hold for
+  every source type. A collector that fetches has routed around all of it.
+- **`compile.py` renders per destination flavour.** The file and the message
+  must carry the same *content*, not the same bytes — an inline Markdown link
+  reached Slack as a title with no address. A new flavour must keep every
+  item's URL; there is a test for exactly that.
+- **A caveat states what it changes for the reader.** An observation about a
+  feed's behaviour is maintenance and belongs in the run's report.
 
-## Status
+## Pipeline
 
-In development. The corpus contract, the profile mechanism, and the shipped
-profiles are implemented and tested; collection and the rest of the pipeline
-are next. Both READMEs carry a status notice that must be removed before
-tagging 0.1.0.
+`parse_args` → `check_config` → `collect` → `prefilter` → **[agent scores]** →
+`apply_table` → `merge` → **[agent summarizes]** → `validate` → `build_digest`
+→ `compile` → `to_notify` → **[agent sends]**.
+
+Judgement lives in exactly the two bracketed steps. Everything else is a
+script, and a change that moves work into a bracket is a change to the
+design, not an implementation detail.

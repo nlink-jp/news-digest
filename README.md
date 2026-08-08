@@ -16,10 +16,6 @@ nobody reads any of them. This skill draws three distinctions instead:
 The third one is the point: it leaves behind a record of *why something did
 not need reading*.
 
-> **Status:** design complete, engine under construction. The skill layout,
-> the data model, and the pipeline contract are settled; the scripts are
-> being implemented. See `docs/en/adr/0001-public-engine-private-corpus.md`.
-
 ## Code here, data elsewhere
 
 This repository holds the engine and nothing else. Your feed list, your
