@@ -17,9 +17,13 @@ repository, not here — `examples/` carries placeholders.
 
 These are load-bearing. Changing one is a design decision, not an edit.
 
-- **`id = sha1(canonical_url)`.** Altering `canonicalize_url` severs every
-  past article from the seen index and from every story that references it.
-  It requires a `schema_version` bump and a rebuild procedure.
+- **`id = sha1(canonical_key)`.** Altering `canonical_key` severs every past
+  article from the seen index and from every story that references it. It
+  requires a `schema_version` bump and a rebuild procedure.
+- **`canonical_key` is a key, not a locator.** It is scheme-less and must
+  never be fetched; `url` holds the address the feed gave. Keeping the two
+  apart is what allows the key to discard everything that does not
+  distinguish one article from another.
 - **`origin` is written once.** Editing a corpus's `sources.toml` never
   rewrites records collected earlier. That is what makes the corpus traceable.
 - **Nothing is discarded.** Prefiltered and overflowed articles are stored

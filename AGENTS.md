@@ -59,9 +59,11 @@ public form is ADR-0001. Two copies of a design drift.
   Repo-specific tests go in the Makefile `check` target, never in this file.
 - **The validator resolves relative Markdown links** inside the skill
   directory. Linking to a reference file before creating it fails `make check`.
-- **`id = sha1(canonical_url)`.** Changing `canonicalize_url` is a breaking
+- **`id = sha1(canonical_key)`.** Changing `canonical_key` is a breaking
   change to every corpus in existence; it needs a `schema_version` bump and a
   documented rebuild.
+- **`canonical_key` is scheme-less and not fetchable.** Fetch `url`. Passing
+  the key to a fetcher is the mistake the name exists to prevent.
 - **The agent must not write a priority.** It writes axis scores;
   `apply_table.py` derives priority from the profile's decision table. This is
   why the triage schema has no priority field.

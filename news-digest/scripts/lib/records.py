@@ -2,8 +2,14 @@
 
 Everything here decides what counts as "the same article", so changes ripple
 through the whole corpus: `article_id` is the key of the seen index and of
-every story reference. Changing `canonicalize_url` severs past records from
+every story reference. Changing `canonical_key` severs past records from
 present ones and requires a `schema_version` bump plus a documented rebuild.
+
+A record keeps two forms of an article's address: `url`, exactly as the feed
+gave it, which is what gets fetched; and `canonical_key`, which exists only to
+answer "have we seen this before". Because the fetchable form is preserved
+separately, the key is free to discard anything that does not distinguish one
+article from another — including the scheme.
 
 Standard library only.
 """
@@ -32,12 +38,29 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
 
-def canonicalize_url(url: str) -> str:
-    """The comparison form of an article URL.
+DEFAULT_PORTS = {"http": "80", "https": "443", "ftp": "21"}
 
-    Lower-cases scheme and host, drops a leading `www.`, strips tracking
-    parameters and the fragment, and removes a trailing slash. Parameters that
-    survive keep their order, so the result is stable for a given input.
+
+def canonical_key(url: str) -> str:
+    """The comparison form of an article's address. **Not fetchable.**
+
+    Returns a scheme-less string such as `example.com/post/1?id=7`. Use the
+    record's `url` field to fetch anything; this exists only to decide whether
+    two addresses name the same article.
+
+    Discarded, because none of it distinguishes one article from another:
+
+    - the **scheme** — otherwise a site migrating to HTTPS republishes its
+      whole archive in a single day
+    - a leading `www.` and the host's letter case
+    - a port that is the default for the scheme
+    - tracking parameters (who referred the reader, not which article)
+    - the fragment, and a trailing slash
+
+    Query parameters that survive are sorted, so two links that carry the same
+    parameters in a different order resolve to one key. Path case is
+    preserved: paths are case-sensitive and two that differ may well be two
+    articles.
     """
     url = (url or "").strip()
     if not url:
@@ -46,30 +69,41 @@ def canonicalize_url(url: str) -> str:
         parts = urllib.parse.urlsplit(url)
     except ValueError:
         return url
-    query = [
-        (k, v)
-        for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
-        if k.lower() not in TRACKING_PARAMS
-    ]
-    netloc = parts.netloc.lower()
-    if netloc.startswith("www."):
-        netloc = netloc[4:]
+    if not parts.netloc:
+        # A relative or non-hierarchical reference. Nothing can be normalized
+        # away safely, so it stands as its own key.
+        return url
+
+    host = (parts.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    netloc = host
+    if parts.port is not None and str(parts.port) != DEFAULT_PORTS.get(parts.scheme.lower()):
+        netloc = f"{host}:{parts.port}"
+
     path = parts.path or "/"
     if len(path) > 1 and path.endswith("/"):
         path = path.rstrip("/")
-    return urllib.parse.urlunsplit(
-        (parts.scheme.lower(), netloc, path, urllib.parse.urlencode(query), "")
+
+    query = sorted(
+        (k, v)
+        for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        if k.lower() not in TRACKING_PARAMS
     )
+    key = netloc + path
+    if query:
+        key += "?" + urllib.parse.urlencode(query)
+    return key
 
 
-def article_id(canonical_url: str) -> str:
-    """`sha1:<16 hex>` of the canonical URL.
+def article_id(key: str) -> str:
+    """`sha1:<16 hex>` of a `canonical_key`.
 
     The algorithm prefix is part of the value on purpose: the identity rule is
     the one thing a corpus cannot silently change, so the data says which rule
     produced it.
     """
-    return "sha1:" + hashlib.sha1(canonical_url.encode("utf-8")).hexdigest()[:16]
+    return "sha1:" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
 def normalize_title(title: str) -> str:

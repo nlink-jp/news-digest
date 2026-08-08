@@ -106,8 +106,10 @@ Slack チャネル ID を抱えていた。ノイズフィルタは各ルール�
 
 - **分離は前身に無かった故障モードを生む。** 公開コードの変更が私有データを壊せる。
   `config_version` と `schema_version` が起動時にこれを止める。
-  記事の同一性を決める `canonicalize_url`（`id = SHA-1(canonical_url)`）の変更は
-  **破壊的変更**として扱い、再構築手順を伴う
+  記事の同一性を決める `canonical_key`（`id = SHA-1(canonical_key)`）の変更は
+  **破壊的変更**として扱い、再構築手順を伴う。取得用のアドレスは
+  レコード内に別に保持するので、この鍵は記事を区別しない要素——スキームを含めて
+  ——をすべて捨てられる
 - コーパスリポジトリはどの series にも属さず、組織所有ですらない。この区分を
   設ける必要がある → [ADR-019](https://github.com/nlink-jp/.github/blob/main/adr/019-deployment-repositories.md)
 - 調整対象が 2 リポジトリになる。リリースサイクルを持つのは公開側だけ

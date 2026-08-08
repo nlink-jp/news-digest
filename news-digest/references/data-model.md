@@ -12,16 +12,26 @@ article was dropped months later. A binary store would forfeit that.
 ## Identity
 
 ```
-id = "sha1:" + sha1(canonical_url)[:16]
+id = "sha1:" + sha1(canonical_key)[:16]
 ```
 
 The algorithm prefix is part of the value: the identity rule is the one thing
 a corpus cannot silently change, so the data says which rule produced it.
 
-`canonical_url` is the article URL after normalization — scheme and host
-lower-cased, a leading `www.` dropped, tracking parameters stripped, fragment
-removed, trailing slash removed. Scheme is *not* normalized away: `http` and
-`https` are different URLs, and a feed that switches genuinely republishes.
+A record keeps the address twice. **`url`** is exactly what the feed gave, and
+it is the only one that is fetchable. **`canonical_key`** exists solely to
+answer "have we seen this before" — a scheme-less string such as
+`example.com/post/1?id=7`.
+
+Separating the two is what lets the key be aggressive. It discards the
+scheme, a leading `www.`, host letter case, a default port, tracking
+parameters, the fragment, and a trailing slash, and it sorts the surviving
+query parameters. None of that distinguishes one article from another, and
+keeping the scheme in particular would mean a site's migration to HTTPS
+republished its entire archive into one day's digest.
+
+Path letter case is preserved: paths are case-sensitive, and two that differ
+may well be two articles.
 
 **Changing the normalization rules is a breaking change.** Past `id` values
 will no longer match, which severs the seen index and every story reference.
@@ -37,10 +47,10 @@ overflowed the candidate limit.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | `sha1:<16 hex>` of the canonical URL |
+| `id` | string | `sha1:<16 hex>` of `canonical_key` |
 | `schema_version` | int | The version this record was written under |
-| `canonical_url` | string | Normalized URL |
-| `url` | string | The URL as the feed gave it |
+| `canonical_key` | string | Comparison key. Scheme-less — never fetch this |
+| `url` | string | The address as the feed gave it. Fetch this |
 | `title` | string | |
 | `summary` | string \| null | Feed excerpt, truncated |
 | `published_at` | string | From the feed |
@@ -97,7 +107,7 @@ rather than repeating it.
 
 ## Seen index — `data/index/seen-YYYY.tsv`
 
-`id`, `canonical_url`, `first_seen_at`, `source_id` — tab-separated, one line
+`id`, `canonical_key`, `first_seen_at`, `source_id` — tab-separated, one line
 per article, append-ordered and split by year so a run appends rather than
 rewriting the whole file.
 

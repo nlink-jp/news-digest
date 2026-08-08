@@ -123,9 +123,12 @@ of the decision table (every axis combination) and of merge idempotence.
 
 - **Separation creates a failure mode the predecessor did not have:** a
   change in public code can break private data. `config_version` and
-  `schema_version` gate this at startup, and a change to `canonicalize_url`
-  — which determines article identity via `SHA-1(canonical_url)` — is
-  treated as a breaking change requiring a rebuild procedure.
+  `schema_version` gate this at startup, and a change to `canonical_key`
+  — which determines article identity via `SHA-1(canonical_key)` — is
+  treated as a breaking change requiring a rebuild procedure. A record keeps
+  the fetchable address separately from that key, which lets the key discard
+  everything that does not distinguish one article from another, the scheme
+  included.
 - The corpus repository is not a member of any series and is not owned by
   the organization. That category needs to exist; see
   [ADR-019](https://github.com/nlink-jp/.github/blob/main/adr/019-deployment-repositories.md).

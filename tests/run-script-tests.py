@@ -28,45 +28,83 @@ from lib import corpus, profile, records  # noqa: E402
 # ────────────────────────────────────────────────────────────────
 
 
-class TestCanonicalizeURL(unittest.TestCase):
-    def test_strips_tracking_parameters_but_keeps_real_ones(self):
+class TestCanonicalKey(unittest.TestCase):
+    """The key is a comparison form, not a locator — the record's `url` field
+    is what gets fetched. That is what lets the key discard the scheme."""
+
+    def test_is_scheme_less(self):
         self.assertEqual(
-            records.canonicalize_url("https://example.com/a?id=7&utm_source=rss&fbclid=x"),
-            "https://example.com/a?id=7",
+            records.canonical_key("https://example.com/a?id=7"), "example.com/a?id=7"
         )
 
-    def test_lowercases_scheme_and_host_only(self):
+    def test_http_and_https_are_one_article(self):
+        """Otherwise a site migrating to HTTPS republishes its whole archive
+        into a single day's digest."""
         self.assertEqual(
-            records.canonicalize_url("HTTPS://Example.COM/Path/To/Article"),
-            "https://example.com/Path/To/Article",
+            records.canonical_key("http://example.com/post/1"),
+            records.canonical_key("https://example.com/post/1"),
+        )
+
+    def test_strips_tracking_parameters_but_keeps_real_ones(self):
+        self.assertEqual(
+            records.canonical_key("https://example.com/a?id=7&utm_source=rss&fbclid=x"),
+            "example.com/a?id=7",
+        )
+
+    def test_lowercases_the_host_but_not_the_path(self):
+        self.assertEqual(
+            records.canonical_key("HTTPS://Example.COM/Path/To/Article"),
+            "example.com/Path/To/Article",
         )
 
     def test_drops_www_and_fragment_and_trailing_slash(self):
         self.assertEqual(
-            records.canonicalize_url("https://www.example.com/a/#section"),
-            "https://example.com/a",
+            records.canonical_key("https://www.example.com/a/#section"), "example.com/a"
+        )
+
+    def test_drops_a_default_port_but_keeps_a_real_one(self):
+        self.assertEqual(records.canonical_key("https://example.com:443/a"), "example.com/a")
+        self.assertEqual(records.canonical_key("http://example.com:80/a"), "example.com/a")
+        self.assertEqual(records.canonical_key("https://example.com:8443/a"), "example.com:8443/a")
+
+    def test_query_parameter_order_does_not_change_identity(self):
+        self.assertEqual(
+            records.canonical_key("https://example.com/a?b=2&a=1"),
+            records.canonical_key("https://example.com/a?a=1&b=2"),
         )
 
     def test_root_path_keeps_its_slash(self):
-        self.assertEqual(records.canonicalize_url("https://example.com"), "https://example.com/")
+        self.assertEqual(records.canonical_key("https://example.com"), "example.com/")
 
     def test_variants_of_one_article_collapse_to_one_id(self):
         variants = [
             "https://www.example.com/post/1?utm_campaign=daily",
-            "http://example.com/post/1/",  # scheme differs — see below
+            "http://example.com/post/1/",
             "https://example.com/post/1#comments",
             "https://example.com/post/1?ref=twitter",
+            "HTTPS://WWW.Example.com:443/post/1",
         ]
-        ids = {records.article_id(records.canonicalize_url(u)) for u in variants}
-        # Scheme is part of identity: http and https are different URLs and a
-        # feed that changes scheme genuinely republishes. Everything else
-        # collapses.
-        self.assertEqual(len(ids), 2)
+        ids = {records.article_id(records.canonical_key(u)) for u in variants}
+        self.assertEqual(len(ids), 1)
+
+    def test_different_articles_stay_distinct(self):
+        distinct = [
+            "https://example.com/post/1",
+            "https://example.com/post/2",
+            "https://example.com/Post/1",  # path case is significant
+            "https://other.example.com/post/1",
+            "https://example.com/post/1?page=2",
+        ]
+        keys = {records.canonical_key(u) for u in distinct}
+        self.assertEqual(len(keys), len(distinct))
 
     def test_empty_and_malformed_input_do_not_raise(self):
-        self.assertEqual(records.canonicalize_url(""), "")
-        self.assertEqual(records.canonicalize_url("   "), "")
-        self.assertIsInstance(records.canonicalize_url("not a url"), str)
+        self.assertEqual(records.canonical_key(""), "")
+        self.assertEqual(records.canonical_key("   "), "")
+        self.assertIsInstance(records.canonical_key("not a url"), str)
+
+    def test_a_relative_reference_stands_as_its_own_key(self):
+        self.assertEqual(records.canonical_key("/post/1"), "/post/1")
 
 
 class TestArticleID(unittest.TestCase):
