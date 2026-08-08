@@ -2549,7 +2549,8 @@ class TestSplitMarkdown(unittest.TestCase):
         parts = to_notify.split_markdown(text, 1000)
         self.assertGreater(len(parts), 1)
         for part in parts[1:]:
-            self.assertTrue(part.lstrip().startswith("##"))
+            body = part[len(to_notify.CONTINUED):].lstrip()
+            self.assertTrue(body.startswith("##"))
 
     def test_never_begins_mid_item(self):
         """A message opening with a fragment of a headline reads as
@@ -2558,17 +2559,40 @@ class TestSplitMarkdown(unittest.TestCase):
             f"### Headline number {i}\n\n{'body ' * 60}\n\n" for i in range(6)
         )
         for part in to_notify.split_markdown(text, 900)[1:]:
-            self.assertTrue(part.lstrip().startswith(("#", "*")), part[:40])
+            body = part[len(to_notify.CONTINUED):].lstrip()
+            self.assertTrue(body.startswith(("#", "*")), body[:40])
 
-    def test_every_part_is_within_the_limit(self):
+    def test_every_part_is_within_the_limit_marker_included(self):
+        """The marker used to be added after the split, which pushed a real
+        message seven characters over."""
         text = "# D\n\n" + "".join(f"### Item {i}\n\n{'x' * 200}\n\n" for i in range(40))
-        for part in to_notify.split_markdown(text, 1000):
+        for limit in (400, 700, 1000):
+            for part in to_notify.split_markdown(text, limit):
+                self.assertLessEqual(len(part), limit, f"limit {limit}")
+
+    def test_a_multibyte_digest_is_measured_in_characters(self):
+        """A Japanese digest is about three bytes to the character; measuring
+        bytes would split it into three times as many messages."""
+        text = "# ダイジェスト\n\n" + "".join(f"## 見出し{i}\n\n{'あ' * 200}\n\n" for i in range(10))
+        parts = to_notify.split_markdown(text, 1000)
+        for part in parts:
             self.assertLessEqual(len(part), 1000)
+        self.assertLess(len(parts), 8)
+
+    def test_continuation_parts_are_marked(self):
+        text = "# D\n\n" + "".join(f"## S{i}\n\n{'x' * 400}\n\n" for i in range(5))
+        parts = to_notify.split_markdown(text, 1000)
+        self.assertGreater(len(parts), 1)
+        self.assertFalse(parts[0].startswith(to_notify.CONTINUED))
+        for part in parts[1:]:
+            self.assertTrue(part.startswith(to_notify.CONTINUED))
 
     def test_an_unbreakable_block_is_cut_rather_than_rejected(self):
         parts = to_notify.split_markdown("x" * 5000, 1000)
-        self.assertEqual(len(parts), 5)
         self.assertTrue(all(len(p) <= 1000 for p in parts))
+        prefix = f"{to_notify.CONTINUED}\n\n"
+        rejoined = parts[0] + "".join(p[len(prefix):] for p in parts[1:])
+        self.assertEqual(rejoined, "x" * 5000)
 
     def test_nothing_is_lost_in_the_split(self):
         text = "# D\n\n" + "".join(f"## S{i}\n\nbody{i}\n\n" for i in range(10))

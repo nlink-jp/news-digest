@@ -37,23 +37,40 @@ DEFAULT_LIMIT = 3800
 CONTINUED = "*(continued)*"
 
 
-def split_markdown(text: str, limit: int) -> list[str]:
+def split_markdown(text: str, limit: int, continued: str = CONTINUED) -> list[str]:
     """Split at the largest boundary that fits: sections, then items, then lines.
+
+    Returns parts that already carry the continuation marker, so "every part
+    is within the limit" is a property of the result rather than something the
+    caller has to preserve. Adding the marker afterwards is what pushed a real
+    message seven characters over.
 
     Splitting mid-item would produce a message whose first line is a fragment
     of a headline, which reads as corruption rather than as continuation.
-    """
-    if len(text) <= limit:
-        return [text] if text.strip() else []
 
+    Character counts, not bytes: the destination limit is expressed in
+    characters, and a Japanese digest is roughly three bytes to the character.
+    """
+    if not text.strip():
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    prefix = f"{continued}\n\n"
+    budget = max(1, limit - len(prefix))
+
+    parts: list[str] | None = None
     for separator in ("\n## ", "\n### ", "\n\n", "\n"):
         blocks = _blocks(text, separator)
-        if all(len(b) <= limit for b in blocks):
-            return _pack(blocks, limit)
+        if all(len(b) <= budget for b in blocks):
+            parts = _pack(blocks, budget)
+            break
+    if parts is None:
+        # Nothing structural is left, so cut rather than emit a message the
+        # destination will reject.
+        parts = [text[i: i + budget] for i in range(0, len(text), budget)]
 
-    # A single block longer than the limit: nothing structural is left, so cut
-    # it rather than emit a message the destination will reject.
-    return [text[i: i + limit] for i in range(0, len(text), limit)]
+    return [parts[0]] + [prefix + p for p in parts[1:]]
 
 
 def _blocks(text: str, separator: str) -> list[str]:
@@ -112,9 +129,8 @@ def main() -> int:
     args.out_prefix.parent.mkdir(parents=True, exist_ok=True)
     written = []
     for i, message in enumerate(messages, start=1):
-        body = message if i == 1 else f"{CONTINUED}\n\n{message}"
         path = args.out_prefix.with_name(f"{args.out_prefix.name}-{i:02d}.md")
-        path.write_text(body, encoding="utf-8")
+        path.write_text(message, encoding="utf-8")
         written.append(str(path))
 
     print(
