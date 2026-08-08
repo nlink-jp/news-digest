@@ -108,6 +108,7 @@ def main() -> int:
     parser.add_argument("--out-prefix", type=Path, required=True)
     parser.add_argument("--kind", help="destination kind (default: the corpus's first)")
     parser.add_argument("--limit", type=int, help="override the character limit")
+    parser.add_argument("--flavor", choices=compile_mod.FLAVORS, help="override the markup flavour")
     args = parser.parse_args()
 
     try:
@@ -124,8 +125,11 @@ def main() -> int:
 
     kind = args.kind or (corpus.destinations[0].kind if corpus.destinations else "slack")
     limit = args.limit or limit_for(kind)
+    # Render for the destination. Shipping one dialect everywhere is what cost
+    # a real digest its links.
+    flavor = args.flavor or (compile_mod.SLACK if kind == "slack" else compile_mod.MARKDOWN)
 
-    messages = split_markdown(compile_mod.render(digest), limit)
+    messages = split_markdown(compile_mod.render(digest, flavor), limit)
     args.out_prefix.parent.mkdir(parents=True, exist_ok=True)
 
     # Clear parts left by an earlier invocation. The caller sends msg-01,
@@ -146,10 +150,14 @@ def main() -> int:
         json.dumps(
             {
                 "kind": kind,
+                "flavor": flavor,
                 "limit": limit,
                 "parts": written,
                 "destinations": [
-                    {"id": d.id, "kind": d.kind, "channel": d.channel, "thread": d.thread}
+                    {
+                        "id": d.id, "kind": d.kind, "channel": d.channel,
+                        "thread": d.thread, "broadcast": d.broadcast,
+                    }
                     for d in corpus.destinations
                 ],
             },

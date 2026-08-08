@@ -36,3 +36,7 @@ channel = "C0XXXXXXXXX"
 # Hang parts 2..n under the first message, so a long digest does not push the
 # channel around.
 thread = true
+# ...but still surface those continuations in the channel. Turn this off only
+# if you want the thread to stay quiet: without it, everything after the first
+# message is visible only to someone who opens the thread.
+broadcast = true

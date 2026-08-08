@@ -37,6 +37,10 @@ class Destination:
     kind: str
     channel: str
     thread: bool = False
+    # Whether a threaded continuation is also shown in the channel. Off, the
+    # second half of a long digest is only visible to someone who opens the
+    # thread — which is most of the digest, and none of the reader's habit.
+    broadcast: bool = True
 
 
 @dataclass(frozen=True)
@@ -143,6 +147,7 @@ def _parse_destinations(raw: object, root: Path) -> tuple[Destination, ...]:
                 kind=str(_require(entry, "kind", where)),
                 channel=channel,
                 thread=bool(entry.get("thread", False)),
+                broadcast=bool(entry.get("broadcast", True)),
             )
         )
     return tuple(out)

@@ -2349,6 +2349,41 @@ class TestCompile(unittest.TestCase):
         self.assertIn("Exploited in the wild.", out)
         self.assertIn("Body summary.", out)
 
+    def test_every_item_url_survives_every_flavor(self):
+        """The invariant that matters. A first real delivery reduced an inline
+        link to its title alone, and the digest arrived naming articles nobody
+        could open — a digest that selects what to read and drops the way to
+        read it."""
+        digest = self._digest()
+        for flavor in compile_mod.FLAVORS:
+            out = compile_mod.render(digest, flavor)
+            for section in digest["sections"]:
+                for item in section.get("items", []):
+                    with self.subTest(flavor=flavor, url=item["url"]):
+                        self.assertIn(item["url"], out)
+
+    def test_the_slack_flavor_puts_the_address_on_its_own_line(self):
+        """Inline is the form a markup converter drops; a bare URL is not."""
+        out = compile_mod.render(self._digest(), compile_mod.SLACK)
+        self.assertIn("\nhttps://example.com/a\n", out)
+        self.assertNotIn("](https://example.com/a)", out)
+
+    def test_the_slack_flavor_uses_no_headings(self):
+        """Slack's dialect has none; they arrive as literal hashes."""
+        out = compile_mod.render(self._digest(), compile_mod.SLACK)
+        for line in out.splitlines():
+            self.assertFalse(line.startswith("#"), line)
+
+    def test_both_flavors_carry_the_same_content(self):
+        digest = self._digest()
+        for text in ("A critical flaw", "Exploited in the wild.", "Body summary.", "Alpha"):
+            for flavor in compile_mod.FLAVORS:
+                self.assertIn(text, compile_mod.render(digest, flavor), (flavor, text))
+
+    def test_an_unknown_flavor_is_refused(self):
+        with self.assertRaises(ValueError):
+            compile_mod.render(self._digest(), "teletype")
+
     def test_a_must_read_without_a_body_says_so(self):
         """It was judged on its headline, and the reader should know."""
         digest = self._digest()

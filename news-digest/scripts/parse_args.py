@@ -93,7 +93,10 @@ def main() -> int:
             "include_priorities": list(prof.layout.include_priorities),
         },
         "destinations": [
-            {"id": d.id, "kind": d.kind, "channel": d.channel, "thread": d.thread}
+            {
+                "id": d.id, "kind": d.kind, "channel": d.channel,
+                "thread": d.thread, "broadcast": d.broadcast,
+            }
             for d in corpus.destinations
         ],
         "paths": {
