@@ -1,0 +1,55 @@
+# How a digest is laid out. Read by build_digest.py and compile.py, so the
+# rendered Markdown and the text that gets sent are produced from the same
+# description and cannot drift apart.
+
+# Priorities that appear in the digest body. Everything else is still stored
+# in the corpus with its verdict; it just is not shown.
+include_priorities = ["must_read", "should_read", "skim"]
+
+# Priorities whose article bodies are fetched and summarized.
+deep_read_priorities = ["must_read"]
+
+# Upper bound on items shown in one digest. Beyond this, the overflow is
+# reported as a count rather than dropped silently.
+max_items = 25
+
+[[section]]
+id = "must_read"
+title = "Must read"
+kind = "items"
+priorities = ["must_read"]
+empty_text = "Nothing today requires immediate attention."
+
+[[section]]
+id = "should_read"
+title = "Worth reading"
+kind = "items"
+priorities = ["should_read"]
+
+[[section]]
+id = "skim"
+title = "Skim"
+kind = "items"
+priorities = ["skim"]
+
+[[section]]
+id = "story_updates"
+title = "Continuing stories"
+kind = "story_updates"
+
+# The record of why something did not need reading. Without this section a
+# quiet day and a day full of rehashes look identical.
+[[section]]
+id = "stale_topics"
+title = "No new facts today"
+kind = "stale_topics"
+
+[[section]]
+id = "anomalies"
+title = "Anomalies"
+kind = "anomalies"
+
+[[section]]
+id = "stats"
+title = "Counts"
+kind = "stats"

@@ -1,0 +1,12 @@
+# Security news. A specialization of `generic`: same axes, sharper meanings,
+# and a tighter path to must_read.
+#
+# It replaces rubric.md, decision-table.toml, and interests.schema.toml, and
+# inherits axes.toml and layout.toml unchanged. Inheriting the axes is the
+# point — it is what keeps a corpus scored under this profile comparable with
+# one scored under the base.
+
+name = "security-news"
+extends = "generic"
+profile_version = 1
+description = "Vulnerabilities, incidents, and threat activity, read operationally."

@@ -1,0 +1,64 @@
+# Axis scores → reading priority, for security news.
+#
+# Tighter than the base table in one specific way: significance alone never
+# reaches must_read, and the significance-driven path additionally requires a
+# source that establishes facts rather than amplifies them.
+#
+# The reason is volume. Security coverage re-reports the same event across
+# many outlets within hours, and an early secondary account is frequently
+# wrong about scope. A table that promoted every large-sounding story to
+# must_read would produce a must_read list nobody trusts — at which point the
+# category has stopped working, which is the failure this whole tool exists to
+# avoid.
+
+default = "archive"
+
+# A rehash is a rehash however large the underlying matter is. First, so that
+# a long-running incident is not re-promoted every day it is mentioned.
+[[rule]]
+when = { novelty = 0 }
+priority = "minor_update"
+
+# Lands on our own environment, our customers, or our obligations, and there
+# is a real event behind it. This is the path that matters most and it does
+# not depend on how the wider world rates the story.
+[[rule]]
+when = { relevance = 3, significance = ">=2" }
+priority = "must_read"
+
+# Field-level event, close enough to act on, reported by a source that
+# establishes facts: a vendor advisory, an authority, or a first-party
+# analysis.
+[[rule]]
+when = { significance = 3, relevance = ">=2", credibility = ["primary", "analysis"] }
+priority = "must_read"
+
+# The same event where the only reporting so far is secondary or community.
+# Worth reading today; not worth acting on until it is corroborated.
+[[rule]]
+when = { significance = 3, relevance = ">=2" }
+priority = "should_read"
+
+[[rule]]
+when = { relevance = 3 }
+priority = "should_read"
+
+[[rule]]
+when = { significance = ">=3" }
+priority = "should_read"
+
+[[rule]]
+when = { significance = ">=2", relevance = ">=1" }
+priority = "should_read"
+
+[[rule]]
+when = { relevance = ">=2" }
+priority = "skim"
+
+[[rule]]
+when = { significance = ">=2" }
+priority = "skim"
+
+[[rule]]
+when = { novelty = ">=2", relevance = ">=1" }
+priority = "skim"

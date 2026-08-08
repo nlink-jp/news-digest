@@ -1,0 +1,45 @@
+# Evaluation axes — the base vocabulary every profile shares.
+#
+# Three axes, because their frames of reference are orthogonal: what is
+# already known, the world with the reader removed, and the reader. A fourth
+# axis tends to be a product of these (actionability ≈ significance ×
+# relevance; urgency ≈ novelty × relevance), and a correlated axis costs
+# judgement while making the decision table harder to read.
+#
+# A profile that extends this one should sharpen what the scores MEAN for its
+# subject area by replacing rubric.md — not by renaming these IDs. The IDs are
+# what keeps an accumulated corpus comparable with itself after a rubric is
+# tuned.
+
+[[axis]]
+id = "novelty"
+question = "What does this add to what is already known?"
+min = 0
+max = 3
+[axis.labels]
+0 = "Nothing. A rehash, a syndicated copy, or a follow-up with no new facts."
+1 = "A detail on a known matter: a number, a name, a date."
+2 = "A substantive development in a known matter."
+3 = "First report, or a fact that changes how the known matter is understood."
+
+[[axis]]
+id = "significance"
+question = "How big is this, with the reader removed from the picture?"
+min = 0
+max = 3
+[axis.labels]
+0 = "Trivial. Of consequence to no one in particular."
+1 = "Of interest to people who follow this area."
+2 = "Consequential: many parties have to respond or reconsider."
+3 = "Changes the premises of the field."
+
+[[axis]]
+id = "relevance"
+question = "How directly does this touch the reader or their organization?"
+min = 0
+max = 3
+[axis.labels]
+0 = "No point of contact."
+1 = "Worth knowing as background on the field."
+2 = "Not direct, but material for a proposal, an advisory, or an internal share."
+3 = "Directly affects the reader's own environment, customers, or obligations."

@@ -12,12 +12,16 @@ article was dropped months later. A binary store would forfeit that.
 ## Identity
 
 ```
-id = sha1(canonical_url)
+id = "sha1:" + sha1(canonical_url)[:16]
 ```
 
-`canonical_url` is the article URL after normalization: scheme and host
-lower-cased, default port removed, tracking parameters stripped, fragment
-removed, trailing slash normalized.
+The algorithm prefix is part of the value: the identity rule is the one thing
+a corpus cannot silently change, so the data says which rule produced it.
+
+`canonical_url` is the article URL after normalization — scheme and host
+lower-cased, a leading `www.` dropped, tracking parameters stripped, fragment
+removed, trailing slash removed. Scheme is *not* normalized away: `http` and
+`https` are different URLs, and a feed that switches genuinely republishes.
 
 **Changing the normalization rules is a breaking change.** Past `id` values
 will no longer match, which severs the seen index and every story reference.
@@ -33,7 +37,7 @@ overflowed the candidate limit.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | `sha1(canonical_url)` |
+| `id` | string | `sha1:<16 hex>` of the canonical URL |
 | `schema_version` | int | The version this record was written under |
 | `canonical_url` | string | Normalized URL |
 | `url` | string | The URL as the feed gave it |

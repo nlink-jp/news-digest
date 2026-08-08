@@ -34,13 +34,16 @@ news-digest/            The skill — the only thing `make package` ships
 ├── SKILL.md            Phase 0–9 pipeline; frontmatter name must equal the directory
 ├── references/
 │   └── data-model.md   Record shapes, identity rule, re-analysis queries
-├── scripts/            (P2+) parse_args, check_config, collect, prefilter,
+├── scripts/lib/        corpus.py (.newsrc.toml contract, version gate),
+│                       profile.py (axes, extends chain, decision table),
+│                       records.py (identity and text normalization)
+├── scripts/collectors/ (next) rss / jsonfeed / html / json_api + shared HTTP layer
+├── scripts/            (next) parse_args, check_config, collect, prefilter,
 │                       apply_table, merge, build_digest, compile, to_notify, validate
-├── collectors/         (P2+) rss / jsonfeed / html / json_api + shared HTTP layer
-└── profiles/           (P3+) generic, security-news (extends generic)
+└── profiles/           generic; security-news extends it
 tests/
 ├── validate-skill.sh   Byte-identical vendored copy of .github/templates/ (ADR-006)
-└── run-script-tests.py (P2+) behaviour tests, hooked into the Makefile check target
+└── run-script-tests.py Behaviour tests, hooked into the Makefile check target
 examples/config/        (P5) sanitized starting configuration — placeholders only
 docs/{en,ja}/adr/       Design records
 ```
@@ -76,5 +79,7 @@ public form is ADR-0001. Two copies of a design drift.
 
 ## Status
 
-Scaffold complete, engine not yet implemented. Both READMEs carry a status
-notice that must be removed before tagging 0.1.0.
+In development. The corpus contract, the profile mechanism, and the shipped
+profiles are implemented and tested; collection and the rest of the pipeline
+are next. Both READMEs carry a status notice that must be removed before
+tagging 0.1.0.

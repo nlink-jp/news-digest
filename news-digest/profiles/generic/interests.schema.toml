@@ -1,0 +1,42 @@
+# What a corpus's config/interests.toml must provide for this profile.
+#
+# check_config.py enforces this before a run. The point is that a profile and
+# a configuration that do not fit each other fail immediately, rather than
+# producing a digest whose relevance scores were made from nothing.
+
+[[require]]
+path = "org.description"
+type = "string"
+min_chars = 40
+why = """
+The relevance axis is scored against this. One or two sentences on what the \
+reader does, in whose interest they read the news. Without it, relevance has \
+no referent and every article looks equally distant."""
+
+[[require]]
+path = "topics.high"
+type = "array"
+min_items = 1
+why = "Subjects that raise relevance. Written as statements, not keywords."
+
+[[optional]]
+path = "topics.medium"
+type = "array"
+why = "Subjects worth knowing about but rarely acted on."
+
+[[optional]]
+path = "downweight.topics"
+type = "array"
+why = """
+Subjects to push down when they slip past the prefilter. A safety net, not a \
+substitute for filters.toml."""
+
+[[optional]]
+path = "digest.lang"
+type = "string"
+why = "Output language for the digest. Defaults to the corpus's first source language."
+
+[[optional]]
+path = "digest.max_items"
+type = "integer"
+why = "Overrides the profile layout's max_items for this corpus."

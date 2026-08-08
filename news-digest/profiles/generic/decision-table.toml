@@ -1,0 +1,53 @@
+# Axis scores → reading priority.
+#
+# Rules are evaluated top-down and the first match wins, so the table reads as
+# "most decisive case first". `default` applies when nothing matches.
+#
+# This table is applied by apply_table.py. The agent never writes a priority,
+# which is why a score and its verdict cannot disagree.
+
+default = "archive"
+
+# A rehash is a rehash however large the underlying matter is — that is the
+# whole point of tracking stories. This rule comes first deliberately: without
+# it, a major continuing story would be re-promoted to must_read every single
+# day it was mentioned.
+[[rule]]
+when = { novelty = 0 }
+priority = "minor_update"
+
+# Big and close to home.
+[[rule]]
+when = { significance = ">=3", relevance = ">=2" }
+priority = "must_read"
+
+[[rule]]
+when = { relevance = 3, significance = ">=2" }
+priority = "must_read"
+
+# Directly affects the reader, but the wider matter is modest.
+[[rule]]
+when = { relevance = 3 }
+priority = "should_read"
+
+# Field-changing, but no direct contact.
+[[rule]]
+when = { significance = ">=3" }
+priority = "should_read"
+
+[[rule]]
+when = { significance = ">=2", relevance = ">=1" }
+priority = "should_read"
+
+[[rule]]
+when = { relevance = ">=2" }
+priority = "skim"
+
+[[rule]]
+when = { significance = ">=2" }
+priority = "skim"
+
+# A genuinely new development with some contact, even if small.
+[[rule]]
+when = { novelty = ">=2", relevance = ">=1" }
+priority = "skim"

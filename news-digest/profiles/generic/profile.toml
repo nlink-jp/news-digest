@@ -1,0 +1,13 @@
+# The base profile. Domain-neutral on purpose: it defines how scoring works,
+# not what is worth scoring highly in any particular field.
+#
+# A subject-area profile extends this one and replaces the files it needs to
+# change. A file present in a child replaces the parent's copy whole.
+
+name = "generic"
+profile_version = 1
+description = "Domain-neutral base: novelty / significance / relevance."
+
+# The priority vocabulary. Everything else — the decision table, the layout —
+# may only name values from this list.
+priorities = ["must_read", "should_read", "skim", "minor_update", "archive"]

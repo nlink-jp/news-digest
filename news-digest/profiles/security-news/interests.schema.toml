@@ -1,0 +1,73 @@
+# What a corpus's config/interests.toml must provide for the security-news
+# profile. Extends what the base profile asks for with the inventory the
+# relevance axis is scored against.
+#
+# This file names the SHAPE only. The values — which products, whose
+# customers, which obligations — belong in the corpus, which is private for
+# exactly that reason.
+
+[[require]]
+path = "org.description"
+type = "string"
+min_chars = 40
+why = """
+What the reader does, and in whose interest they read security news. Whether \
+they read as a potential victim, as someone who advises others, or both."""
+
+[[require]]
+path = "topics.high"
+type = "array"
+min_items = 1
+why = "Subjects that raise relevance, written as statements rather than keywords."
+
+[[require]]
+path = "stack.watch_products"
+type = "array"
+min_items = 1
+why = """
+Products whose vulnerabilities require a check — the reader's own and their \
+customers'. This is the single largest input to relevance 3; an empty list \
+makes the axis guesswork."""
+
+[[optional]]
+path = "topics.critical"
+type = "array"
+why = """
+Subjects that reach relevance 3 on their own. Keep this short. Placing \
+'other organizations' incidents' here promotes every incident report to \
+must_read and empties the category."""
+
+[[optional]]
+path = "topics.medium"
+type = "array"
+why = "Worth knowing about, rarely acted on."
+
+[[optional]]
+path = "stack.platforms"
+type = "array"
+why = "Operating systems and cloud platforms in use."
+
+[[optional]]
+path = "stack.languages"
+type = "array"
+why = "Languages and ecosystems in use — supply-chain relevance."
+
+[[optional]]
+path = "stack.tools"
+type = "array"
+why = "Software the reader operates directly."
+
+[[optional]]
+path = "downweight.topics"
+type = "array"
+why = "Subjects to push down when they slip past the prefilter."
+
+[[optional]]
+path = "digest.lang"
+type = "string"
+why = "Output language for the digest."
+
+[[optional]]
+path = "digest.max_items"
+type = "integer"
+why = "Overrides the profile layout's max_items for this corpus."

@@ -15,6 +15,7 @@ uninstall:
 
 check:
 	@./tests/validate-skill.sh
+	@python3 tests/run-script-tests.py
 
 test: check
 
