@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns="http://purl.org/rss/1.0/"
+         xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel rdf:about="https://example.jp/"><title>Example JP</title></channel>
+  <item rdf:about="https://example.jp/news/100">
+    <title>国内組織で不正アクセス</title>
+    <description>調査中と発表した。</description>
+    <dc:date>2026-08-08T08:00:00+09:00</dc:date>
+  </item>
+</rdf:RDF>

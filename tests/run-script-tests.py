@@ -17,10 +17,16 @@ REPO = Path(__file__).resolve().parent.parent
 SKILL = REPO / "news-digest"
 SCRIPTS = SKILL / "scripts"
 PROFILES = SKILL / "profiles"
+FEEDS = REPO / "tests" / "fixtures" / "feeds"
 
 sys.path.insert(0, str(SCRIPTS))
 
-from lib import corpus, profile, records  # noqa: E402
+import collectors  # noqa: E402
+from lib import corpus, http, profile, records  # noqa: E402
+
+
+def feed(name: str) -> bytes:
+    return (FEEDS / name).read_bytes()
 
 
 # ────────────────────────────────────────────────────────────────
@@ -539,6 +545,320 @@ class TestProfileValidation(unittest.TestCase):
             axis.validate_score("2")
         with self.assertRaises(profile.ProfileError):
             axis.validate_score(True)
+
+
+# ────────────────────────────────────────────────────────────────
+# Collectors
+# ────────────────────────────────────────────────────────────────
+
+
+class TestCollectorRegistry(unittest.TestCase):
+    def test_default_type_is_rss(self):
+        self.assertIs(collectors.get(None), collectors.get("rss"))
+        self.assertIs(collectors.get(""), collectors.get("rss"))
+
+    def test_unknown_type_is_an_error_not_a_fallback(self):
+        """A typo that silently parsed as RSS would yield zero entries and
+        look exactly like a quiet feed."""
+        with self.assertRaises(collectors.CollectorError) as ctx:
+            collectors.get("rss2")
+        self.assertIn("rss", str(ctx.exception))
+
+    def test_every_registered_collector_exposes_parse(self):
+        for name in collectors.available():
+            self.assertTrue(callable(getattr(collectors.get(name), "parse", None)), name)
+
+
+class TestRSSCollector(unittest.TestCase):
+    def test_rss2(self):
+        entries = collectors.get("rss").parse(feed("rss2.xml"))
+        self.assertEqual(len(entries), 2)
+        first = entries[0]
+        self.assertEqual(first.title, "Pre-authentication flaw in Example Gateway")
+        self.assertEqual(first.url, "https://example.com/advisory/1?utm_source=rss")
+        self.assertNotIn("<", first.summary)
+        self.assertIn("unauthenticated", first.summary)
+        self.assertEqual(first.published_at.utcoffset().total_seconds(), 9 * 3600)
+
+    def test_rss2_falls_back_to_a_permalink_guid_when_link_is_absent(self):
+        entries = collectors.get("rss").parse(feed("rss2.xml"))
+        self.assertEqual(entries[1].url, "https://example.com/advisory/2")
+
+    def test_atom_prefers_the_alternate_link_over_others(self):
+        entries = collectors.get("rss").parse(feed("atom.xml"))
+        self.assertEqual(entries[0].url, "https://example.com/research/9")
+
+    def test_atom_accepts_a_lone_link_without_rel(self):
+        entries = collectors.get("rss").parse(feed("atom.xml"))
+        self.assertEqual(entries[1].url, "https://example.com/research/10")
+
+    def test_rdf_reads_the_address_from_rdf_about_and_the_date_from_dublin_core(self):
+        entries = collectors.get("rss").parse(feed("rdf.xml"))
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].url, "https://example.jp/news/100")
+        self.assertEqual(entries[0].published_at.utcoffset().total_seconds(), 9 * 3600)
+
+    def test_an_untitled_entry_gets_a_derived_headline(self):
+        """Microblog-shaped feeds publish untitled entries. Without this every
+        one of them is dropped later by the minimum-title-length rule."""
+        entries = collectors.get("rss").parse(feed("untitled.xml"))
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0].title)
+        self.assertGreaterEqual(len(entries[0].title), 8)
+
+    def test_a_dtd_is_refused_before_parsing(self):
+        with self.assertRaises(collectors.CollectorError) as ctx:
+            collectors.get("rss").parse(feed("billion-laughs.xml"))
+        self.assertIn("DTD", str(ctx.exception))
+
+    def test_an_entity_declaration_is_refused_wherever_it_appears(self):
+        body = b"<rss><channel></channel></rss>" + b" " * 70000 + b"<!ENTITY x 'y'>"
+        with self.assertRaises(collectors.CollectorError):
+            collectors.get("rss").parse(body)
+
+    def test_malformed_xml_raises_rather_than_returning_nothing(self):
+        with self.assertRaises(collectors.CollectorError):
+            collectors.get("rss").parse(b"<rss><channel><item></rss>")
+
+    def test_an_html_page_is_not_mistaken_for_a_feed(self):
+        with self.assertRaises(collectors.CollectorError):
+            collectors.get("rss").parse(b"<html><body><p>Not a feed</p></body></html>")
+
+    def test_empty_document_raises(self):
+        with self.assertRaises(collectors.CollectorError):
+            collectors.get("rss").parse(b"")
+
+    def test_a_byte_order_mark_does_not_break_parsing(self):
+        body = "﻿".encode("utf-8") + feed("rss2.xml")
+        self.assertEqual(len(collectors.get("rss").parse(body)), 2)
+
+
+class TestJSONFeedCollector(unittest.TestCase):
+    def test_parses_items_and_strips_markup(self):
+        entries = collectors.get("jsonfeed").parse(feed("jsonfeed.json"))
+        self.assertEqual(len(entries), 2)  # the third has no address
+        self.assertEqual(entries[0].url, "https://example.com/j/1")
+        self.assertNotIn("<", entries[0].summary)
+
+    def test_id_is_used_as_the_address_when_it_is_one(self):
+        entries = collectors.get("jsonfeed").parse(feed("jsonfeed.json"))
+        self.assertEqual(entries[1].url, "https://example.com/j/2")
+
+    def test_invalid_json_raises(self):
+        with self.assertRaises(collectors.CollectorError):
+            collectors.get("jsonfeed").parse(b"{not json")
+
+    def test_a_document_without_items_raises(self):
+        with self.assertRaises(collectors.CollectorError) as ctx:
+            collectors.get("jsonfeed").parse(b'{"version": "x", "title": "y"}')
+        self.assertIn("items", str(ctx.exception))
+
+
+class TestEntryNormalization(unittest.TestCase):
+    def test_an_entry_without_an_address_is_dropped(self):
+        self.assertIsNone(collectors.make_entry(url="", title="Has a title"))
+        self.assertIsNone(collectors.make_entry(url="   "))
+
+    def test_summary_markup_is_stripped_the_same_way_for_every_collector(self):
+        rss_entries = collectors.get("rss").parse(feed("rss2.xml"))
+        json_entries = collectors.get("jsonfeed").parse(feed("jsonfeed.json"))
+        for entry in rss_entries + json_entries:
+            self.assertNotIn("<", entry.summary)
+            self.assertNotIn("&lt;", entry.summary)
+
+    def test_an_unparseable_date_leaves_published_at_unset(self):
+        entry = collectors.make_entry(url="https://example.com/a", published_raw="soon")
+        self.assertIsNone(entry.published_at)
+
+
+# ────────────────────────────────────────────────────────────────
+# The HTTP layer
+# ────────────────────────────────────────────────────────────────
+
+
+class FakeHeaders(dict):
+    def get(self, key, default=None):  # case-insensitive, like http.client
+        for k, v in self.items():
+            if k.lower() == key.lower():
+                return v
+        return default
+
+
+class FakeResponse:
+    def __init__(self, body: bytes, status: int = 200, headers: dict | None = None, url: str = "https://x/f"):
+        self._body = body
+        self.status = status
+        self.headers = FakeHeaders(headers or {})
+        self._url = url
+
+    def read(self, n: int = -1) -> bytes:
+        return self._body if n < 0 else self._body[:n]
+
+    def geturl(self) -> str:
+        return self._url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FakeOpener:
+    """Records requests and replays a scripted sequence of outcomes."""
+
+    def __init__(self, *outcomes):
+        self.outcomes = list(outcomes)
+        self.requests = []
+
+    def open(self, request, timeout=None):
+        self.requests.append(request)
+        outcome = self.outcomes.pop(0) if self.outcomes else FakeResponse(b"ok")
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def http_error(code: int, headers: dict | None = None):
+    import urllib.error
+    import email.message
+
+    msg = email.message.Message()
+    for k, v in (headers or {}).items():
+        msg[k] = v
+    return urllib.error.HTTPError("https://x/f", code, "err", msg, None)
+
+
+class TestHttpClient(unittest.TestCase):
+    def _client(self, *outcomes, **kw):
+        slept: list[float] = []
+        opener = FakeOpener(*outcomes)
+        client = http.HttpClient(
+            opener=opener, sleep=slept.append, backoff_base=1.0, **kw
+        )
+        return client, opener, slept
+
+    def test_sends_the_configured_user_agent(self):
+        client, opener, _ = self._client(FakeResponse(b"body"))
+        client.get("https://example.com/f")
+        self.assertEqual(opener.requests[0].get_header("User-agent"), http.DEFAULT_USER_AGENT)
+
+    def test_sends_validators_when_the_caller_holds_them(self):
+        client, opener, _ = self._client(FakeResponse(b"body"))
+        client.get("https://example.com/f", etag='W/"abc"', last_modified="Thu, 07 Aug 2026 00:00:00 GMT")
+        request = opener.requests[0]
+        self.assertEqual(request.get_header("If-none-match"), 'W/"abc"')
+        self.assertEqual(request.get_header("If-modified-since"), "Thu, 07 Aug 2026 00:00:00 GMT")
+
+    def test_304_is_a_result_not_an_error(self):
+        """Unchanged is a normal outcome. Reporting it as an empty feed would
+        make every quiet source look broken."""
+        client, _, _ = self._client(http_error(304))
+        response = client.get("https://example.com/f")
+        self.assertTrue(response.not_modified)
+        self.assertEqual(response.body, b"")
+
+    def test_returns_validators_for_the_next_run(self):
+        client, _, _ = self._client(
+            FakeResponse(b"body", headers={"ETag": '"v2"', "Last-Modified": "Fri, 08 Aug 2026 00:00:00 GMT"})
+        )
+        response = client.get("https://example.com/f")
+        self.assertEqual(response.etag, '"v2"')
+        self.assertEqual(response.last_modified, "Fri, 08 Aug 2026 00:00:00 GMT")
+
+    def test_decompresses_a_gzip_body(self):
+        import gzip as gz
+
+        payload = b"<rss/>" * 100
+        client, _, _ = self._client(
+            FakeResponse(gz.compress(payload), headers={"Content-Encoding": "gzip"})
+        )
+        self.assertEqual(client.get("https://example.com/f").body, payload)
+
+    def test_a_body_over_the_cap_is_refused_not_truncated(self):
+        """A truncated feed parses into a plausible but wrong set of articles,
+        which is worse than no feed at all."""
+        client, _, _ = self._client(FakeResponse(b"x" * 5000), max_bytes=1000)
+        with self.assertRaises(http.HttpError) as ctx:
+            client.get("https://example.com/f")
+        self.assertEqual(ctx.exception.kind, "too_large")
+
+    def test_a_body_exactly_at_the_cap_is_accepted(self):
+        client, _, _ = self._client(FakeResponse(b"x" * 1000), max_bytes=1000)
+        self.assertEqual(len(client.get("https://example.com/f").body), 1000)
+
+    def test_retries_a_transient_status_then_succeeds(self):
+        client, opener, slept = self._client(http_error(503), FakeResponse(b"ok"))
+        self.assertEqual(client.get("https://example.com/f").body, b"ok")
+        self.assertEqual(len(opener.requests), 2)
+        self.assertEqual(slept, [1.0])
+
+    def test_does_not_retry_an_answered_error(self):
+        client, opener, _ = self._client(http_error(404), FakeResponse(b"ok"))
+        with self.assertRaises(http.HttpError) as ctx:
+            client.get("https://example.com/f")
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertEqual(len(opener.requests), 1)
+
+    def test_obeys_retry_after_on_429(self):
+        """Ignoring a stated delay is how a polite client becomes the reason a
+        feed blocks it."""
+        client, _, slept = self._client(http_error(429, {"Retry-After": "7"}), FakeResponse(b"ok"))
+        client.get("https://example.com/f")
+        self.assertEqual(slept, [7.0])
+
+    def test_caps_an_absurd_retry_after(self):
+        client, _, slept = self._client(http_error(429, {"Retry-After": "99999"}), FakeResponse(b"ok"))
+        client.get("https://example.com/f")
+        self.assertEqual(slept, [120.0])
+
+    def test_backoff_grows(self):
+        client, _, slept = self._client(
+            http_error(503), http_error(503), FakeResponse(b"ok"), retries=2
+        )
+        client.get("https://example.com/f")
+        self.assertEqual(slept, [1.0, 2.0])
+
+    def test_gives_up_after_the_retry_budget(self):
+        client, opener, _ = self._client(
+            http_error(503), http_error(503), http_error(503), retries=2
+        )
+        with self.assertRaises(http.HttpError):
+            client.get("https://example.com/f")
+        self.assertEqual(len(opener.requests), 3)
+
+    def test_a_timeout_is_classified_and_retried(self):
+        import urllib.error
+
+        client, opener, _ = self._client(
+            urllib.error.URLError("timed out"), FakeResponse(b"ok")
+        )
+        client.get("https://example.com/f")
+        self.assertEqual(len(opener.requests), 2)
+
+    def test_refuses_a_non_http_url(self):
+        client, opener, _ = self._client()
+        for url in ("file:///etc/passwd", "ftp://example.com/f", "/relative"):
+            with self.subTest(url=url):
+                with self.assertRaises(http.HttpError) as ctx:
+                    client.get(url)
+                self.assertEqual(ctx.exception.kind, "bad_scheme")
+        self.assertEqual(opener.requests, [])
+
+    def test_error_kinds_are_stable_identifiers(self):
+        import urllib.error
+
+        cases = [
+            (http_error(500), "http_status"),
+            (urllib.error.URLError("timed out"), "timeout"),
+            (urllib.error.URLError("nodename nor servname provided"), "unreachable"),
+        ]
+        for outcome, kind in cases:
+            with self.subTest(kind=kind):
+                client, _, _ = self._client(outcome, retries=0)
+                with self.assertRaises(http.HttpError) as ctx:
+                    client.get("https://example.com/f")
+                self.assertEqual(ctx.exception.kind, kind)
 
 
 if __name__ == "__main__":

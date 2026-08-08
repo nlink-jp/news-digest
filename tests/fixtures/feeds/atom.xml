@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Research</title>
+  <entry>
+    <title>Campaign against a whole sector</title>
+    <link rel="edit" href="https://example.com/edit/9"/>
+    <link rel="alternate" href="https://example.com/research/9"/>
+    <summary>Observed since June.</summary>
+    <published>2026-08-07T22:15:00Z</published>
+  </entry>
+  <entry>
+    <title>Only a self link</title>
+    <link href="https://example.com/research/10"/>
+    <content type="html">&lt;p&gt;Details.&lt;/p&gt;</content>
+    <updated>2026-08-08T02:00:00Z</updated>
+  </entry>
+</feed>
