@@ -27,6 +27,13 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 DEFAULT_ACCEPT_LANGUAGE = {"ja": "ja,en-US;q=0.8,en;q=0.6", "en": "en-US,en;q=0.9"}
 
+# A source whose newest article is older than this has stopped publishing,
+# whatever its HTTP status says. Conditional GET makes a frozen feed answer 304
+# forever, which reads as perfectly healthy — this is the only thing that
+# notices. Per-source `stale_after_days` overrides it for genuinely low-volume
+# feeds (a quarterly advisory is not dead at 61 days).
+DEFAULT_STALE_AFTER_DAYS = 60
+
 
 class SourceError(Exception):
     """A source list that cannot be collected from. The message names the fix."""
@@ -67,6 +74,15 @@ class Source:
     weight: float = 1.0
     enabled: bool = True
     accept_language: str | None = None
+    # False when this skill cannot retrieve article bodies from the source at
+    # all — a site that refuses automated requests by policy, not one that is
+    # having a bad day. Articles from it are scored and reported on their
+    # headline, and the run stops wasting a fetch attempt per must-read and
+    # stops filing the same permanent condition as a fresh anomaly every day.
+    # A browser tool may still reach such a site; that is a property of the
+    # tools available at run time, not of the source.
+    body_fetchable: bool = True
+    stale_after_days: int = DEFAULT_STALE_AFTER_DAYS
     note: str = ""
     auth: Auth | None = None
     options: dict[str, Any] = field(default_factory=dict)
@@ -89,6 +105,7 @@ class Source:
             "lang": self.lang,
             "tier": self.tier,
             "weight": self.weight,
+            "body_fetchable": self.body_fetchable,
         }
 
 
@@ -135,6 +152,10 @@ def _parse_one(entry: Any, where: str, known_types: tuple[str, ...], default_typ
     if weight <= 0:
         _fail(where, "weight must be positive (use enabled = false to switch a source off)")
 
+    stale_after = entry.get("stale_after_days", DEFAULT_STALE_AFTER_DAYS)
+    if not isinstance(stale_after, int) or isinstance(stale_after, bool) or stale_after < 1:
+        _fail(where, "stale_after_days must be a positive integer")
+
     auth = None
     raw_auth = entry.get("auth")
     if raw_auth is not None:
@@ -150,6 +171,7 @@ def _parse_one(entry: Any, where: str, known_types: tuple[str, ...], default_typ
     known_keys = {
         "id", "name", "url", "type", "category", "lang", "tier",
         "weight", "enabled", "accept_language", "note", "auth", "options",
+        "body_fetchable", "stale_after_days",
     }
     unknown = sorted(set(entry) - known_keys)
     if unknown:
@@ -166,6 +188,8 @@ def _parse_one(entry: Any, where: str, known_types: tuple[str, ...], default_typ
         weight=weight,
         enabled=enabled,
         accept_language=(str(entry["accept_language"]) if entry.get("accept_language") else None),
+        body_fetchable=bool(entry.get("body_fetchable", True)),
+        stale_after_days=stale_after,
         note=str(entry.get("note", "")),
         auth=auth,
         options=dict(entry.get("options") or {}),

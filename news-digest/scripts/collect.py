@@ -166,6 +166,11 @@ def main() -> int:
         source = result.source
         st = store.get(source.id)
         gap = window_lib.rolled_past(result.oldest_published, st.last_seen_published_at)
+        # The whole page the feed served fell inside the window, so the window
+        # is wider than the feed's reach and there may have been more it never
+        # showed. Weaker than a confirmed gap — it says "cannot tell", not
+        # "lost" — so it is reported to the operator, not to the reader.
+        saturated = result.status == "ok" and result.fetched > 0
 
         in_window = 0
         for entry in result.entries:
@@ -202,7 +207,12 @@ def main() -> int:
                 "error_kind": result.error_kind,
                 "error": result.error_message,
                 "gap_detected": gap,
+                "saturated": saturated and in_window == result.fetched,
                 "probably_dead": st.probably_dead,
+                "stale_days": (
+                    round(age, 1) if (age := window_lib.days_since(st.last_seen_published_at)) else None
+                ),
+                "stale": bool(age is not None and age > source.stale_after_days),
                 "last_seen_published_at": st.last_seen_published_at,
             }
         )
@@ -234,6 +244,11 @@ def main() -> int:
         "disabled_sources": sorted(s.id for s in skipped),
         "gaps": sorted(s["id"] for s in stats_sources if s["gap_detected"]),
         "errors": sorted(s["id"] for s in stats_sources if s["status"] == "error"),
+        # Maintenance, not reader-facing: a feed frozen since 2022 is not
+        # missing today's news, it has none. Same for saturation, which only
+        # says the window may have been wider than the feed's reach.
+        "stale_sources": sorted(s["id"] for s in stats_sources if s["stale"]),
+        "saturated_sources": sorted(s["id"] for s in stats_sources if s["saturated"]),
         "silent_sources": sorted(
             s["id"] for s in stats_sources if s["status"] == "ok" and s["in_window"] == 0
         ),

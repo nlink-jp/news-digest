@@ -127,6 +127,20 @@ def rolled_past(oldest_available: str | None, last_seen: str | None) -> bool:
     return oldest > seen
 
 
+def days_since(timestamp: str | None, *, now: datetime | None = None) -> float | None:
+    """Age of a timestamp in days, or None if it cannot be read.
+
+    Used to notice a feed that has stopped publishing. Conditional GET makes a
+    frozen source answer 304 indefinitely and error counters stay at zero, so
+    nothing else in the pipeline can tell it apart from a healthy quiet one.
+    """
+    parsed = _parse(timestamp) if timestamp else None
+    if parsed is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return (now - parsed).total_seconds() / 86400.0
+
+
 def _parse(value: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))

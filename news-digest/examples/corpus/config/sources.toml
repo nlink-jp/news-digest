@@ -30,6 +30,17 @@
 #   enabled   optional, default true.
 #   accept_language  optional. Only when a feed serves different content by
 #             language and the default derived from `lang` is wrong.
+#   body_fetchable  optional, default true. Set false when the site refuses
+#             automated retrieval as a matter of policy, so its articles can
+#             never be read past the headline. The run then stops attempting a
+#             fetch it knows will fail, and the digest states the limitation
+#             per item instead of filing it as a fresh anomaly every day. Use
+#             it for a standing refusal, not for a site having a bad week.
+#   stale_after_days  optional, default 60. Above this age, the newest article
+#             a source has ever shown marks it as stale. Raise it for
+#             genuinely low-volume feeds — a quarterly advisory is not dead at
+#             61 days. Conditional GET makes a frozen feed answer 304 forever
+#             with no errors, so this is what notices one.
 #   note      optional. Why this source is here, what it is good for, what is
 #             wrong with it. Worth writing — you will not remember.
 #
@@ -51,9 +62,9 @@ category = "advisories"
 lang = "en"
 tier = "primary"
 weight = 1.5
-note = """An authority publishing advisories and known-exploited additions. \
-Note that cisa.gov refuses automated retrieval of article bodies, so items \
-from this source are judged on the headline and feed excerpt."""
+# Publishes on its own schedule; 60 days of quiet is not a dead feed here.
+stale_after_days = 120
+note = "An authority publishing advisories and known-exploited additions."
 
 [[source]]
 id = "jpcert"

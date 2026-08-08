@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-08-08
+
+### Added
+
+- Sources may declare `body_fetchable = false` for a site that refuses
+  automated retrieval as a standing policy. The run stops spending a fetch on
+  something it knows will fail, and the digest states the limitation on the
+  item — distinguishing "not retrieved today" from "never will be", which is
+  the difference between worth retrying and not. Validation no longer demands
+  a fresh anomaly each run for a permanent condition.
+- Staleness detection. A frozen feed answers 304 indefinitely with its error
+  counter at zero, so nothing in the pipeline could tell it apart from a
+  healthy quiet one. Two feeds in a real corpus had last published in 2025 and
+  2022 and looked perfectly well. Sources now report `stale` and `stale_days`
+  against a `stale_after_days` threshold (default 60, per-source override for
+  genuinely low-volume feeds).
+- Saturation reporting. When every item a feed served fell inside the window,
+  the window was wider than the feed's reach and there may have been more it
+  never showed. Weaker than a gap — it says "cannot tell", not "lost" — so it
+  goes to the operator, not the reader.
+
+Both new signals are maintenance, not caveats: a feed frozen since 2022 is not
+missing today's news, it has none.
+
 ## [0.1.0] - 2026-08-08
 
 ### Added

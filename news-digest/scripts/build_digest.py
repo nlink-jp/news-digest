@@ -105,6 +105,9 @@ def build_items(
                 "story_id": verdict.get("story_id"),
                 "summary": extra.get("summary"),
                 "deep_read": bool(extra.get("deep_read", False)),
+                # Absent on records written before the field existed; those
+                # sources were fetchable as far as anyone knew.
+                "body_fetchable": origin.get("body_fetchable", True),
             }
         )
     return out

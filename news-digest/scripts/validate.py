@@ -80,10 +80,16 @@ def check_anomalies(anomalies: list[Any]) -> list[str]:
     return problems
 
 
-def check(narrative: Any, scored: list[dict[str, Any]], prof: profile_lib.Profile) -> list[str]:
+def check(
+    narrative: Any,
+    scored: list[dict[str, Any]],
+    prof: profile_lib.Profile,
+    unfetchable: set[str] | None = None,
+) -> list[str]:
     if not isinstance(narrative, dict):
         return ["narrative must be a JSON object"]
 
+    unfetchable = unfetchable or set()
     problems: list[str] = []
     items, index_problems = index_items(narrative)
     problems.extend(index_problems)
@@ -106,6 +112,12 @@ def check(narrative: Any, scored: list[dict[str, Any]], prof: profile_lib.Profil
             continue
         summary = item.get("summary")
         read = bool(item.get("deep_read", False))
+        if article_id in unfetchable and read:
+            problems.append(
+                f"'{article_id}': deep_read is true, but its source is declared "
+                f"body_fetchable = false. Either the body was not actually read, or "
+                f"the source declaration is wrong."
+            )
         if read and not str(summary or "").strip():
             problems.append(f"'{article_id}': deep_read is true but the summary is empty")
         if not read and summary:
@@ -114,7 +126,13 @@ def check(narrative: Any, scored: list[dict[str, Any]], prof: profile_lib.Profil
                 f"not come from the body is a guess, and guesses are the thing to avoid here."
             )
 
-    unread = [i for i in deep if i in items and not items[i].get("deep_read", False)]
+    # A source declared unable to serve bodies needs no daily explanation: the
+    # condition is permanent and the digest states it per item. Demanding an
+    # anomaly here turned a standing property into fresh news every run.
+    unread = [
+        i for i in deep
+        if i in items and not items[i].get("deep_read", False) and i not in unfetchable
+    ]
     anomalies = narrative.get("anomalies") or []
     if unread and not anomalies:
         problems.append(
@@ -143,6 +161,7 @@ def main() -> int:
     parser.add_argument("--skill-dir", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--narrative", type=Path, required=True)
     parser.add_argument("--triage", type=Path, required=True)
+    parser.add_argument("--prefiltered", type=Path, help="used to find unfetchable sources")
     args = parser.parse_args()
 
     try:
@@ -164,7 +183,16 @@ def main() -> int:
         print(f"ERROR: {args.triage}: {exc}", file=sys.stderr)
         return 2
 
-    problems = check(narrative, scored, prof)
+    unfetchable: set[str] = set()
+    if args.prefiltered and args.prefiltered.is_file():
+        for line in args.prefiltered.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if (record.get("origin") or {}).get("body_fetchable") is False:
+                unfetchable.add(record["id"])
+
+    problems = check(narrative, scored, prof, unfetchable)
     for problem in problems:
         print(f"ERROR: {problem}", file=sys.stderr)
     if problems:

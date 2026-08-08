@@ -933,6 +933,27 @@ class TestSourceList(unittest.TestCase):
         with self.assertRaises(sources_lib.SourceError):
             self._load(SOURCE.replace('url = "https://example.com/feed"', 'url = ""'))
 
+    def test_a_source_is_fetchable_unless_it_says_otherwise(self):
+        source = self._load(SOURCE)[0]
+        self.assertTrue(source.body_fetchable)
+        self.assertTrue(source.origin()["body_fetchable"])
+
+    def test_a_source_can_declare_that_bodies_are_unreachable(self):
+        source = self._load(SOURCE + "body_fetchable = false\n")[0]
+        self.assertFalse(source.body_fetchable)
+        self.assertFalse(source.origin()["body_fetchable"])
+
+    def test_staleness_threshold_defaults_and_overrides(self):
+        self.assertEqual(self._load(SOURCE)[0].stale_after_days,
+                         sources_lib.DEFAULT_STALE_AFTER_DAYS)
+        self.assertEqual(self._load(SOURCE + "stale_after_days = 180\n")[0].stale_after_days, 180)
+
+    def test_a_nonsense_staleness_threshold_is_refused(self):
+        for bad in ("0", "-1", '"soon"'):
+            with self.subTest(bad=bad):
+                with self.assertRaises(sources_lib.SourceError):
+                    self._load(SOURCE + f"stale_after_days = {bad}\n")
+
     def test_a_disabled_source_may_have_no_url(self):
         """It is never fetched, and the entry then records a feed that was
         investigated and found not to work. Deleting it loses the finding."""
@@ -1077,6 +1098,16 @@ class TestWindow(unittest.TestCase):
 
     def test_no_gap_for_a_source_never_collected(self):
         self.assertFalse(window_lib.rolled_past("2026-08-08T00:00:00+00:00", None))
+
+    def test_days_since_measures_the_age_of_the_newest_article(self):
+        now = datetime(2026, 8, 8, tzinfo=timezone.utc)
+        self.assertAlmostEqual(
+            window_lib.days_since("2026-08-01T00:00:00+00:00", now=now), 7.0, places=1
+        )
+
+    def test_days_since_is_none_when_there_is_nothing_to_measure(self):
+        self.assertIsNone(window_lib.days_since(None))
+        self.assertIsNone(window_lib.days_since("soon"))
 
     def test_an_unparseable_timestamp_does_not_invent_a_gap(self):
         self.assertFalse(window_lib.rolled_past("soon", "2026-08-01T00:00:00+00:00"))
@@ -1424,6 +1455,54 @@ enabled = false
         self._run()
         _, stats = self._outputs()
         self.assertEqual(stats["gaps"], [])
+
+    def test_a_frozen_feed_answering_304_is_reported_as_stale(self):
+        """Conditional GET makes it look perfectly healthy: no errors, a
+        successful status, and nothing new since 2022."""
+        store = state_lib.Store(self.root / "data" / "state" / "sources.json")
+        store.get("alpha").last_seen_published_at = "2022-05-18T00:00:00+00:00"
+        store.save()
+        self._fake_network({"alpha.example": http_error(304)})
+        self._run()
+        _, stats = self._outputs()
+        alpha = next(s for s in stats["sources"] if s["id"] == "alpha")
+        self.assertTrue(alpha["stale"])
+        self.assertEqual(alpha["probably_dead"], False)
+        self.assertEqual(alpha["consecutive_errors"] if "consecutive_errors" in alpha else 0, 0)
+        self.assertIn("alpha", stats["stale_sources"])
+
+    def test_a_recently_publishing_source_is_not_stale(self):
+        store = state_lib.Store(self.root / "data" / "state" / "sources.json")
+        store.get("alpha").last_seen_published_at = datetime.now(timezone.utc).isoformat()
+        store.save()
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self._run()
+        _, stats = self._outputs()
+        self.assertEqual(stats["stale_sources"], [])
+
+    def test_a_window_wider_than_the_feed_is_reported_as_saturated(self):
+        """Every item the feed served fell inside the window, so there may
+        have been more it never showed."""
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self._run()
+        _, stats = self._outputs()
+        self.assertIn("alpha", stats["saturated_sources"])
+
+    def test_a_feed_with_items_outside_the_window_is_not_saturated(self):
+        argv = sys.argv
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        sys.argv = [
+            "collect.py", "--repo", str(self.root),
+            "--since", "2026-08-08T05:00:00+00:00", "--until", "2026-08-09",
+            "--out", str(self.work / "collected.jsonl"),
+            "--stats-out", str(self.work / "stats.json"),
+        ]
+        try:
+            collect.main()
+        finally:
+            sys.argv = argv
+        _, stats = self._outputs()
+        self.assertNotIn("alpha", stats["saturated_sources"])
 
     def test_selecting_one_source_collects_only_that_one(self):
         self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
@@ -2408,6 +2487,18 @@ class TestCompile(unittest.TestCase):
         self.assertNotIn("[link](http://evil)", out)
         self.assertNotIn("\n# Fake heading", out)
 
+    def test_an_unreadable_source_says_why_it_was_not_read(self):
+        """One reason is worth retrying tomorrow and the other never will be;
+        the reader can only act on the difference if it is stated."""
+        digest = self._digest()
+        item = digest["sections"][0]["items"][0]
+        item["summary"] = None
+        item["deep_read"] = False
+        item["body_fetchable"] = False
+        out = compile_mod.render(digest)
+        self.assertIn("does not serve article bodies", out)
+        self.assertNotIn("Body not retrieved —", out)
+
     def test_a_non_http_url_is_not_made_into_a_link(self):
         digest = self._digest()
         digest["sections"][0]["items"][0]["url"] = "javascript:alert(1)"
@@ -2490,6 +2581,9 @@ class TestValidateNarrative(unittest.TestCase):
 
     def _check(self, narrative):
         return validate.check(narrative, self.scored, self.prof)
+
+    def _check_with(self, narrative, unfetchable):
+        return validate.check(narrative, self.scored, self.prof, unfetchable)
 
     def _good(self, **kw):
         base = {
@@ -2585,6 +2679,27 @@ class TestValidateNarrative(unittest.TestCase):
     def test_a_caveat_without_a_detail_is_refused(self):
         narrative = self._good(anomalies=[{"kind": "x", "effect": "something changed"}])
         self.assertTrue(any("detail" in p for p in self._check(narrative)))
+
+    def test_an_unfetchable_source_needs_no_daily_anomaly(self):
+        """The condition is permanent. Demanding an explanation each run turns
+        a standing property into fresh news every day."""
+        narrative = self._good(
+            items=[{"id": "sha1:1", "summary": None, "deep_read": False}], anomalies=[]
+        )
+        self.assertEqual(self._check_with(narrative, unfetchable={"sha1:1"}), [])
+
+    def test_a_fetchable_source_still_needs_one(self):
+        narrative = self._good(
+            items=[{"id": "sha1:1", "summary": None, "deep_read": False}], anomalies=[]
+        )
+        self.assertTrue(any("anomaly" in p for p in self._check(narrative)))
+
+    def test_claiming_to_have_read_an_unreadable_source_is_refused(self):
+        narrative = self._good(
+            items=[{"id": "sha1:1", "summary": "Body text.", "deep_read": True}]
+        )
+        problems = self._check_with(narrative, unfetchable={"sha1:1"})
+        self.assertTrue(any("body_fetchable" in p for p in problems))
 
     def test_a_non_object_narrative_is_refused(self):
         self.assertTrue(self._check(["not", "an", "object"]))

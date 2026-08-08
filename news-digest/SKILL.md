@@ -112,9 +112,14 @@ what you say in Phase 9.
   already collected from it, so what fell off in between is gone. Re-running
   does not recover it.
 - `status: "not_modified"` (HTTP 304) means unchanged, not empty.
-- `in_window: 0` on its own is an ordinary quiet source. Mention one in
-  Phase 9 only when it has been quiet for a while or `probably_dead` is set —
-  a feed that answers with nothing every day has usually moved or stopped.
+- `in_window: 0` on its own is an ordinary quiet source.
+- `stale` — the newest article this source has ever shown is older than its
+  `stale_after_days`. Conditional GET makes a frozen feed answer 304 forever
+  with error counters at zero, so this is the only thing that notices. Raise
+  it in Phase 9 with `stale_days`; it is maintenance, not a reader's problem.
+- `saturated` — every item the feed served fell inside the window, so the
+  window was wider than the feed's reach and there may have been more. Weaker
+  than a gap: it says "cannot tell". Also Phase 9.
 
 ## Phase 2 — Prefilter
 
@@ -179,6 +184,13 @@ For each article at a priority listed in the profile's `deep_read_priorities`,
 **fetch its URL and read the body** before writing a 3–5 sentence summary.
 Write the results to `WORK/narrative.json`.
 
+Skip the fetch when the article's `origin.body_fetchable` is `false` — that
+source refuses automated retrieval as a standing policy, and the digest says
+so per item. Set `deep_read: false` and leave `summary` null. Do not file an
+anomaly for it; a permanent condition reported daily is noise. (If a browser
+tool is available to you and the user wants that source read, that is a
+separate decision to raise in Phase 9, not something to do silently.)
+
 - Fetched: `summary` from the body, `deep_read: true`.
 - Not fetched (paywall, bot block, removed): `summary: null`,
   `deep_read: false`, and an entry in `anomalies`. **Never infer body content
@@ -202,7 +214,8 @@ Check what you wrote before it is built into anything:
 
 ```bash
 python3 SKILL_DIR/scripts/validate.py --repo REPO \
-  --narrative WORK/narrative.json --triage WORK/triage-scored.json
+  --narrative WORK/narrative.json --triage WORK/triage-scored.json \
+  --prefiltered WORK/prefiltered.jsonl
 ```
 
 On `ERROR`, fix `WORK/narrative.json` and run it again.

@@ -91,9 +91,18 @@ def render_item(item: dict[str, Any], flavor: str = MARKDOWN) -> str:
     if item.get("summary"):
         lines += ["", escape(item["summary"])]
     elif item.get("priority") == "must_read":
-        # Saying so is the point: a must-read whose body could not be fetched
-        # was judged on its headline, and the reader should know that.
-        lines += ["", "*Body not retrieved — judged on the headline and feed excerpt.*"]
+        # Saying so is the point: a must-read whose body was not read was
+        # judged on its headline, and the reader should know that. Which of
+        # the two reasons applies changes what they can do about it — one is
+        # worth retrying, the other never will be.
+        if item.get("body_fetchable", True):
+            lines += ["", "*Body not retrieved — judged on the headline and feed excerpt.*"]
+        else:
+            lines += [
+                "",
+                "*This source does not serve article bodies to this tool — judged on the "
+                "headline and feed excerpt. Open it to read the rest.*",
+            ]
 
     if item.get("why"):
         lines += ["", f"**Why:** {escape(item['why'])}"]

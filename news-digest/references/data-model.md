@@ -70,6 +70,7 @@ corpus traceable.
 | `source_id`, `source_name`, `feed_url` | |
 | `collector` | The collector type that produced the record (`rss`, `jsonfeed`, …) |
 | `category`, `lang`, `tier`, `weight` | As configured at the time |
+| `body_fetchable` | Whether this source serves article bodies to this tool. Absent on records written before the field existed; read it as true |
 
 ### `triage`
 
