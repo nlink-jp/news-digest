@@ -59,16 +59,27 @@ incomparable with itself.
 the decision table. A rule that cannot be violated does not need to be
 enforced.
 
-## Installation
+## Install
 
-Download the zip from the [releases page][releases] and unzip it into
-`~/.claude/skills/`, or upload it at claude.ai under Settings → Skills.
+Download `news-digest-vX.Y.Z.zip` from
+[Releases](https://github.com/nlink-jp/news-digest/releases), then register it:
 
-From a clone:
+- **In the app** (Claude Desktop, claude.ai, mobile) — add the zip from the
+  skill settings (Customize → Skills). Prefer this route; it survives changes
+  to where skills are stored on disk.
+- **Claude Code** — `unzip news-digest-vX.Y.Z.zip -d ~/.claude/skills/`, or into a
+  project's `.claude/skills/` for a project-scoped install.
+
+From a checkout:
 
 ```bash
 make install
 ```
+
+That builds the release zip and unpacks *that*, so what you run is what a
+release ships — a packaging defect breaks your install rather than reaching
+users. `make install DEST=/path/to/skills` installs elsewhere;
+`make uninstall` removes it.
 
 ## Usage
 

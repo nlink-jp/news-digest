@@ -52,14 +52,25 @@ news-digest (public)                  your-corpus (private)
 
 ## インストール
 
-[リリースページ][releases] の zip を `~/.claude/skills/` に展開するか、
-claude.ai の Settings → Skills にアップロードする。
+[Releases](https://github.com/nlink-jp/news-digest/releases) から
+`news-digest-vX.Y.Z.zip` をダウンロードし、登録する:
 
-クローンからなら:
+- **アプリから**（Claude Desktop / claude.ai / モバイル）— スキル設定
+  （カスタマイズ → スキル）で zip を追加する。**この経路を推奨**。
+  スキルの保存場所が変わっても影響を受けない。
+- **Claude Code** — `unzip news-digest-vX.Y.Z.zip -d ~/.claude/skills/`。
+  プロジェクト単位なら、プロジェクト内の `.claude/skills/` に展開する。
+
+チェックアウトから:
 
 ```bash
 make install
 ```
+
+リリース zip をビルドして**それを**展開するので、手元で動かすものと
+リリースが配るものが一致する。パッケージングの欠陥は利用者に届く前に
+手元のインストールを壊す。`make install DEST=/path/to/skills` で別の場所へ、
+`make uninstall` で削除。
 
 ## 使い方
 
