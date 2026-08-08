@@ -154,11 +154,19 @@ def render_section(section: dict[str, Any], flavor: str = MARKDOWN) -> list[str]
             return []
         lines = [_heading(section["title"], flavor), ""]
         for anomaly in anomalies:
-            if isinstance(anomaly, dict):
-                where = anomaly.get("source") or anomaly.get("kind") or "—"
-                lines.append(f"- **{escape(where)}:** {escape(anomaly.get('detail'))}")
-            else:
+            if not isinstance(anomaly, dict):
                 lines.append(f"- {escape(anomaly)}")
+                continue
+            where = anomaly.get("source") or anomaly.get("kind") or "—"
+            # Lead with what it means for the reader. The mechanism is context;
+            # an entry that only describes the mechanism leaves the reader
+            # asking what they are supposed to do about it.
+            effect = str(anomaly.get("effect") or "").strip()
+            detail = str(anomaly.get("detail") or "").strip()
+            body = effect or detail
+            if effect and detail:
+                body = f"{effect} ({detail})"
+            lines.append(f"- **{escape(where)}:** {escape(body)}")
         return ["\n".join(lines)]
 
     if kind == "stats":

@@ -53,6 +53,33 @@ def index_items(narrative: Any) -> tuple[dict[str, dict[str, Any]], list[str]]:
     return out, problems
 
 
+def check_anomalies(anomalies: list[Any]) -> list[str]:
+    """Every caveat must say what it means for the reader.
+
+    The section sits in a digest someone reads to decide what to do. An entry
+    that only describes a mechanism — a feed formatting its excerpts oddly, a
+    parser quirk — leaves that reader with nothing to do about it, and buries
+    the entries that do. Those observations are maintenance: they belong in
+    the run's report to the operator, not in the digest.
+    """
+    problems: list[str] = []
+    for i, anomaly in enumerate(anomalies):
+        where = f"anomalies[{i}]"
+        if not isinstance(anomaly, dict):
+            problems.append(f"{where}: must be an object with 'detail' and 'effect'")
+            continue
+        if not str(anomaly.get("detail") or "").strip():
+            problems.append(f"{where}: 'detail' is empty — state what happened")
+        if not str(anomaly.get("effect") or "").strip():
+            problems.append(
+                f"{where}: 'effect' is empty. Say what this changes for someone reading "
+                f"the digest — what is missing, what was judged on thin evidence, what "
+                f"they should check elsewhere. If it changes nothing for the reader, it "
+                f"is maintenance: drop it here and raise it in your Phase 9 report instead."
+            )
+    return problems
+
+
 def check(narrative: Any, scored: list[dict[str, Any]], prof: profile_lib.Profile) -> list[str]:
     if not isinstance(narrative, dict):
         return ["narrative must be a JSON object"]
@@ -95,6 +122,8 @@ def check(narrative: Any, scored: list[dict[str, Any]], prof: profile_lib.Profil
         )
     if not isinstance(anomalies, list):
         problems.append("'anomalies' must be an array")
+    else:
+        problems.extend(check_anomalies(anomalies))
 
     overview = str(narrative.get("natural_language_summary") or "").strip()
     if not overview:

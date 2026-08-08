@@ -263,7 +263,9 @@ def main() -> int:
                 "kind": "collection_gap",
                 "source": source_id,
                 "detail": "the feed no longer reaches back to the newest article already "
-                          "collected from it; what fell off in between cannot be recovered",
+                          "collected from it",
+                "effect": f"articles from {source_id} are missing from this digest and cannot "
+                          f"be recovered by re-running. Check it directly if you rely on it.",
             }
         )
     for source_id in stats["source_errors"]:
@@ -272,6 +274,8 @@ def main() -> int:
                 "kind": "source_error",
                 "source": source_id,
                 "detail": "the source could not be collected from this run",
+                "effect": f"nothing from {source_id} was considered today. Its articles are "
+                          f"absent from this digest, not judged unimportant.",
             }
         )
 

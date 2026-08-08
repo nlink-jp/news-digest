@@ -2290,6 +2290,16 @@ class TestBuildDigestEndToEnd(unittest.TestCase):
         kinds = {a["kind"] for a in digest["anomalies"]}
         self.assertEqual(kinds, {"collection_gap", "source_error"})
 
+    def test_generated_caveats_state_their_consequence(self):
+        """They are read by the same person as the rest of the digest."""
+        records = [article("sha1:1", "A headline")]
+        digest = self._build(
+            records, [self._verdict("sha1:1", "skim")],
+            collect_stats={"gaps": ["alpha"], "errors": ["beta"]},
+        )
+        for anomaly in digest["anomalies"]:
+            self.assertTrue(str(anomaly.get("effect") or "").strip(), anomaly)
+
     def test_a_quiet_source_is_counted_not_flagged(self):
         """One line per silent source buries the entries that need action."""
         records = [article("sha1:1", "A headline")]
@@ -2439,6 +2449,16 @@ class TestCompile(unittest.TestCase):
         self.assertIn("Ongoing matter", out)
         self.assertIn("no new versions", out)
 
+    def test_a_caveat_leads_with_its_consequence(self):
+        digest = self._digest(
+            sections=[{"id": "caveats", "title": "Caveats", "kind": "anomalies",
+                       "anomalies": [{"source": "alpha", "detail": "the feed rolled over",
+                                      "effect": "articles from alpha are missing"}]}]
+        )
+        out = compile_mod.render(digest)
+        line = next(l for l in out.splitlines() if l.startswith("- **alpha"))
+        self.assertLess(line.index("missing"), line.index("rolled over"))
+
     def test_stats_render_the_funnel(self):
         digest = self._digest(
             sections=[{"id": "stats", "title": "Counts", "kind": "stats",
@@ -2498,7 +2518,7 @@ class TestValidateNarrative(unittest.TestCase):
     def test_a_summary_without_a_body_read_is_refused(self):
         narrative = self._good(
             items=[{"id": "sha1:1", "summary": "Sounds bad.", "deep_read": False}],
-            anomalies=[{"kind": "fetch_failed", "detail": "403"}],
+            anomalies=[{"kind": "fetch_failed", "detail": "403", "effect": "judged on the headline"}],
         )
         problems = self._check(narrative)
         self.assertTrue(any("guess" in p for p in problems))
@@ -2512,7 +2532,10 @@ class TestValidateNarrative(unittest.TestCase):
     def test_an_unread_must_read_with_an_anomaly_passes(self):
         narrative = self._good(
             items=[{"id": "sha1:1", "summary": None, "deep_read": False}],
-            anomalies=[{"kind": "fetch_failed", "source": "Alpha", "detail": "403 from the site"}],
+            anomalies=[{
+                "kind": "fetch_failed", "source": "Alpha", "detail": "403 from the site",
+                "effect": "this must-read was judged on its headline; open it yourself",
+            }],
         )
         self.assertEqual(self._check(narrative), [])
 
@@ -2538,6 +2561,30 @@ class TestValidateNarrative(unittest.TestCase):
             natural_language_summary="Nothing notable today; routine advisories only."
         )
         self.assertEqual(self._check(narrative), [])
+
+    def test_a_caveat_must_say_what_it_changes_for_the_reader(self):
+        """An entry the reader can do nothing about buries the ones they can."""
+        narrative = self._good(
+            anomalies=[{"kind": "feed_quality", "source": "r/x",
+                        "detail": "this feed formats its excerpts oddly"}]
+        )
+        problems = self._check(narrative)
+        self.assertTrue(any("effect" in p for p in problems))
+        self.assertTrue(any("maintenance" in p for p in problems))
+
+    def test_a_caveat_with_both_halves_passes(self):
+        narrative = self._good(
+            anomalies=[{
+                "kind": "feed_quality", "source": "r/x",
+                "detail": "excerpts are not article summaries",
+                "effect": "the four r/x items were scored from their titles alone",
+            }]
+        )
+        self.assertEqual(self._check(narrative), [])
+
+    def test_a_caveat_without_a_detail_is_refused(self):
+        narrative = self._good(anomalies=[{"kind": "x", "effect": "something changed"}])
+        self.assertTrue(any("detail" in p for p in self._check(narrative)))
 
     def test_a_non_object_narrative_is_refused(self):
         self.assertTrue(self._check(["not", "an", "object"]))
