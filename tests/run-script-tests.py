@@ -26,6 +26,8 @@ sys.path.insert(0, str(SCRIPTS))
 import collect  # noqa: E402
 import collectors  # noqa: E402
 import apply_table  # noqa: E402
+import build_digest  # noqa: E402
+import compile as compile_mod  # noqa: E402
 import merge  # noqa: E402
 import prefilter  # noqa: E402
 from lib import corpus, http, profile, records  # noqa: E402
@@ -2049,6 +2051,283 @@ class TestMerge(unittest.TestCase):
         self._run(self._records(), verdicts)
         ids = {s["id"] for s in stories_lib.read_all(self.corpus.stories_dir)}
         self.assertEqual(len(ids), 2)
+
+
+# ────────────────────────────────────────────────────────────────
+# Assembling and rendering the digest
+# ────────────────────────────────────────────────────────────────
+
+
+class TestStaleTopics(unittest.TestCase):
+    """The section that gives the reader a reason not to read something."""
+
+    def _item(self, id_, story_id, novelty, why="Restates yesterday."):
+        return {
+            "id": id_, "story_id": story_id, "axes": {"novelty": novelty}, "why": why,
+            "source": "Alpha", "priority": "minor_update",
+        }
+
+    def test_a_story_whose_articles_all_add_nothing_is_stale(self):
+        items = [self._item("a", "s1", 0), self._item("b", "s1", 0)]
+        stale = build_digest.stale_topics(items, {"s1": {"title": "Ongoing matter"}})
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0]["title"], "Ongoing matter")
+        self.assertEqual(stale[0]["article_count"], 2)
+
+    def test_one_article_with_a_new_fact_keeps_the_story_live(self):
+        items = [self._item("a", "s1", 0), self._item("b", "s1", 2)]
+        self.assertEqual(build_digest.stale_topics(items, {"s1": {}}), [])
+
+    def test_articles_without_a_story_are_not_stale_topics(self):
+        self.assertEqual(build_digest.stale_topics([self._item("a", None, 0)], {}), [])
+
+    def test_the_reason_comes_from_the_article(self):
+        items = [self._item("a", "s1", 0, why="Same advisory, no new versions listed.")]
+        stale = build_digest.stale_topics(items, {"s1": {"title": "T"}})
+        self.assertIn("no new versions", stale[0]["reason"])
+
+
+class TestOrdering(unittest.TestCase):
+    def test_items_are_ordered_by_the_axes_the_profile_declares(self):
+        items = [
+            {"id": "low", "axes": {"novelty": 1, "significance": 1, "relevance": 1}},
+            {"id": "high", "axes": {"novelty": 3, "significance": 3, "relevance": 3}},
+            {"id": "mid", "axes": {"novelty": 3, "significance": 1, "relevance": 1}},
+        ]
+        got = [i["id"] for i in build_digest.order(items, ["novelty", "significance", "relevance"])]
+        self.assertEqual(got, ["high", "mid", "low"])
+
+    def test_a_missing_axis_sorts_as_zero_rather_than_raising(self):
+        items = [{"id": "a", "axes": {}}, {"id": "b", "axes": {"novelty": 1}}]
+        self.assertEqual([i["id"] for i in build_digest.order(items, ["novelty"])], ["b", "a"])
+
+
+class TestBuildDigestEndToEnd(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / corpus.MARKER).write_text(NEWSRC, encoding="utf-8")
+        self.work = self.root / ".work"
+        self.work.mkdir()
+
+    def _write(self, name, payload):
+        path = self.work / name
+        if name.endswith(".jsonl"):
+            path.write_text(
+                "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in payload), encoding="utf-8"
+            )
+        else:
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def _build(self, records, scored, narrative=None, collect_stats=None, prefilter_summary=None):
+        self._write("prefiltered.jsonl", records)
+        self._write("triage.json", scored)
+        self._write("narrative.json", narrative or {})
+        self._write("story-updates.json", {"created": [], "updated": []})
+        self._write("prefilter-summary.json", prefilter_summary or {})
+        self._write("collect-stats.json", collect_stats or {})
+        argv = sys.argv
+        sys.argv = [
+            "build_digest.py", "--repo", str(self.root), "--skill-dir", str(SKILL),
+            "--prefiltered", str(self.work / "prefiltered.jsonl"),
+            "--triage", str(self.work / "triage.json"),
+            "--narrative", str(self.work / "narrative.json"),
+            "--story-updates", str(self.work / "story-updates.json"),
+            "--prefilter-summary", str(self.work / "prefilter-summary.json"),
+            "--collect-stats", str(self.work / "collect-stats.json"),
+            "--date", "2026-08-08",
+            "--out", str(self.work / "digest.json"),
+        ]
+        try:
+            code = build_digest.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual(code, 0)
+        return json.loads((self.work / "digest.json").read_text(encoding="utf-8"))
+
+    def _verdict(self, id_, priority, **kw):
+        base = {
+            "id": id_, "priority": priority,
+            "axes": {"novelty": 3, "significance": 3, "relevance": 3},
+            "credibility": "primary", "why": "A named fact.", "story_id": None,
+        }
+        base.update(kw)
+        return base
+
+    def test_items_land_in_the_section_their_priority_names(self):
+        records = [article("sha1:1", "Critical headline"), article("sha1:2", "Lesser headline")]
+        digest = self._build(
+            records,
+            [self._verdict("sha1:1", "must_read"), self._verdict("sha1:2", "skim")],
+        )
+        sections = {s["id"]: s for s in digest["sections"]}
+        self.assertEqual([i["id"] for i in sections["must_read"]["items"]], ["sha1:1"])
+        self.assertEqual([i["id"] for i in sections["skim"]["items"]], ["sha1:2"])
+
+    def test_archived_items_never_reach_the_body(self):
+        records = [article("sha1:1", "Archived headline")]
+        digest = self._build(records, [self._verdict("sha1:1", "archive")])
+        shown = [i["id"] for s in digest["sections"] if s["kind"] == "items" for i in s.get("items", [])]
+        self.assertEqual(shown, [])
+        self.assertEqual(digest["stats"]["by_priority"], {"archive": 1})
+
+    def test_the_agents_summary_is_attached_to_its_article(self):
+        records = [article("sha1:1", "Critical headline")]
+        narrative = {
+            "items": [{"id": "sha1:1", "summary": "Three sentences of body.", "deep_read": True}],
+            "natural_language_summary": "A quiet day apart from one thing.",
+        }
+        digest = self._build(records, [self._verdict("sha1:1", "must_read")], narrative)
+        item = digest["sections"][0]["items"][0]
+        self.assertEqual(item["summary"], "Three sentences of body.")
+        self.assertTrue(item["deep_read"])
+        self.assertEqual(digest["natural_language_summary"], "A quiet day apart from one thing.")
+
+    def test_counts_are_computed_not_transcribed(self):
+        records = [article(f"sha1:{i}", f"Headline {i}") for i in range(3)]
+        digest = self._build(
+            records,
+            [
+                self._verdict("sha1:0", "must_read"),
+                self._verdict("sha1:1", "skim"),
+                self._verdict("sha1:2", "skim"),
+            ],
+            collect_stats={"totals": {"collected": 42, "sources_ok": 5}},
+            prefilter_summary={"candidates": 3, "dropped_by_rule": {"noise:sale": 9}},
+        )
+        self.assertEqual(digest["stats"]["collected"], 42)
+        self.assertEqual(digest["stats"]["by_priority"], {"must_read": 1, "skim": 2})
+        self.assertEqual(digest["stats"]["dropped_by_rule"], {"noise:sale": 9})
+
+    def test_collector_observations_become_anomalies_without_the_agent(self):
+        """Reporting a gap only when the agent noticed it would make the
+        section a measure of attention rather than of what happened."""
+        records = [article("sha1:1", "A headline")]
+        digest = self._build(
+            records, [self._verdict("sha1:1", "skim")],
+            collect_stats={"gaps": ["alpha"], "silent_sources": ["beta"]},
+        )
+        kinds = {a["kind"] for a in digest["anomalies"]}
+        self.assertEqual(kinds, {"collection_gap", "silent_source"})
+
+    def test_the_agents_anomalies_are_kept_alongside(self):
+        records = [article("sha1:1", "A headline")]
+        narrative = {"anomalies": [{"kind": "injection_attempt", "detail": "text addressed to me"}]}
+        digest = self._build(
+            records, [self._verdict("sha1:1", "skim")], narrative,
+            collect_stats={"gaps": ["alpha"]},
+        )
+        kinds = {a["kind"] for a in digest["anomalies"]}
+        self.assertEqual(kinds, {"injection_attempt", "collection_gap"})
+
+    def test_the_item_limit_reports_what_it_withheld(self):
+        records = [article(f"sha1:{i}", f"Headline {i}") for i in range(30)]
+        digest = self._build(records, [self._verdict(f"sha1:{i}", "skim") for i in range(30)])
+        section = next(s for s in digest["sections"] if s["id"] == "skim")
+        self.assertEqual(len(section["items"]), 25)
+        self.assertEqual(section["withheld"], 5)
+        self.assertEqual(digest["items_total"], 30)
+
+
+class TestCompile(unittest.TestCase):
+    def _digest(self, **kw):
+        base = {
+            "date": "2026-08-08", "profile": "generic", "items_total": 1,
+            "natural_language_summary": "One thing happened.",
+            "stats": {"by_priority": {"must_read": 1}, "collected": 10, "candidates": 4, "evaluated": 1},
+            "sections": [
+                {
+                    "id": "must_read", "title": "Must read", "kind": "items", "withheld": 0,
+                    "items": [
+                        {
+                            "id": "sha1:1", "title": "A critical flaw", "url": "https://example.com/a",
+                            "source": "Alpha", "published_at": "2026-08-08T00:00:00+00:00",
+                            "priority": "must_read", "axes": {"novelty": 3, "significance": 3},
+                            "credibility": "primary", "why": "Exploited in the wild.",
+                            "summary": "Body summary.", "deep_read": True,
+                        }
+                    ],
+                }
+            ],
+        }
+        base.update(kw)
+        return base
+
+    def test_renders_the_headline_as_a_link(self):
+        out = compile_mod.render(self._digest())
+        self.assertIn("[A critical flaw](https://example.com/a)", out)
+        self.assertIn("Exploited in the wild.", out)
+        self.assertIn("Body summary.", out)
+
+    def test_a_must_read_without_a_body_says_so(self):
+        """It was judged on its headline, and the reader should know."""
+        digest = self._digest()
+        digest["sections"][0]["items"][0]["summary"] = None
+        digest["sections"][0]["items"][0]["deep_read"] = False
+        self.assertIn("Body not retrieved", compile_mod.render(digest))
+
+    def test_markdown_in_a_feed_title_cannot_restructure_the_document(self):
+        digest = self._digest()
+        digest["sections"][0]["items"][0]["title"] = "# Fake heading [link](http://evil) `code`"
+        out = compile_mod.render(digest)
+        self.assertNotIn("[link](http://evil)", out)
+        self.assertNotIn("\n# Fake heading", out)
+
+    def test_a_non_http_url_is_not_made_into_a_link(self):
+        digest = self._digest()
+        digest["sections"][0]["items"][0]["url"] = "javascript:alert(1)"
+        out = compile_mod.render(digest)
+        self.assertNotIn("javascript:", out)
+
+    def test_an_empty_section_uses_its_empty_text(self):
+        digest = self._digest(
+            sections=[
+                {
+                    "id": "must_read", "title": "Must read", "kind": "items", "items": [],
+                    "empty_text": "Nothing today requires immediate attention.",
+                }
+            ]
+        )
+        self.assertIn("Nothing today requires immediate attention.", compile_mod.render(digest))
+
+    def test_a_withheld_count_is_stated(self):
+        digest = self._digest()
+        digest["sections"][0]["withheld"] = 4
+        self.assertIn("4 more not shown", compile_mod.render(digest))
+
+    def test_stale_topics_render_with_their_reason(self):
+        digest = self._digest(
+            sections=[
+                {
+                    "id": "stale", "title": "No new facts today", "kind": "stale_topics",
+                    "topics": [
+                        {
+                            "story_id": "story-2026-0001", "title": "Ongoing matter",
+                            "article_count": 3, "sources": ["Alpha", "Beta"],
+                            "reason": "Same advisory, no new versions listed.",
+                        }
+                    ],
+                }
+            ]
+        )
+        out = compile_mod.render(digest)
+        self.assertIn("Ongoing matter", out)
+        self.assertIn("no new versions", out)
+
+    def test_stats_render_the_funnel(self):
+        digest = self._digest(
+            sections=[{"id": "stats", "title": "Counts", "kind": "stats",
+                       "stats": {"collected": 10, "candidates": 4, "evaluated": 1,
+                                 "by_priority": {"must_read": 1}, "gaps": ["alpha"]}}]
+        )
+        out = compile_mod.render(digest)
+        self.assertIn("Collected 10", out)
+        self.assertIn("Collection gaps: alpha", out)
+
+    def test_output_ends_with_exactly_one_newline(self):
+        out = compile_mod.render(self._digest())
+        self.assertTrue(out.endswith("\n"))
+        self.assertFalse(out.endswith("\n\n"))
 
 
 if __name__ == "__main__":
