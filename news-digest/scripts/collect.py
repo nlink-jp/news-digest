@@ -42,6 +42,7 @@ class SourceResult:
     etag: str | None = None
     last_modified: str | None = None
     newest_published: str | None = None
+    oldest_published: str | None = None
     error_kind: str | None = None
     error_message: str | None = None
 
@@ -80,6 +81,9 @@ def fetch_source(
             http_status=response.status,
         )
 
+    # Both ends of what the feed currently offers. The oldest is what makes a
+    # gap detectable: a feed that no longer reaches back to our marker has
+    # rolled past it, and those items are gone.
     published = [e.published_at.isoformat() for e in entries if e.published_at]
     return SourceResult(
         source=source,
@@ -90,6 +94,7 @@ def fetch_source(
         etag=response.etag,
         last_modified=response.last_modified,
         newest_published=max(published) if published else None,
+        oldest_published=min(published) if published else None,
     )
 
 
@@ -160,7 +165,7 @@ def main() -> int:
     for result in results:
         source = result.source
         st = store.get(source.id)
-        gap = window_lib.gap_before(win, st.last_seen_published_at)
+        gap = window_lib.rolled_past(result.oldest_published, st.last_seen_published_at)
 
         in_window = 0
         for entry in result.entries:

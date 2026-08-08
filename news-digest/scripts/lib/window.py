@@ -106,19 +106,30 @@ def resolve(
     return Window(since=since, until=until)
 
 
-def gap_before(window: Window, last_seen: str | None) -> bool:
-    """True when the window opens after the newest article already collected.
+def rolled_past(oldest_available: str | None, last_seen: str | None) -> bool:
+    """True when the feed no longer reaches back to what was last collected.
 
-    Anything published between the two is no longer in the feed, so re-running
-    will not recover it. The run reports this rather than treating the absence
-    as news that did not happen.
+    Feeds return only their most recent N items. When the oldest item a feed
+    still offers was published *after* the newest item already collected from
+    it, everything in between has fallen off and cannot be recovered by
+    re-running.
+
+    Deliberately independent of the requested window: asking for a narrow
+    window is a choice, not a loss. Comparing against the window instead
+    reports a gap for every source that simply has not published lately,
+    which is the normal case and drowns the real signal.
     """
-    if window.since is None or not last_seen:
+    if not oldest_available or not last_seen:
         return False
+    oldest, seen = _parse(oldest_available), _parse(last_seen)
+    if oldest is None or seen is None:
+        return False
+    return oldest > seen
+
+
+def _parse(value: str) -> datetime | None:
     try:
-        seen = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return False
-    if seen.tzinfo is None:
-        seen = seen.replace(tzinfo=timezone.utc)
-    return window.since > seen
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

@@ -253,21 +253,25 @@ def main() -> int:
     # Facts the collector observed are anomalies whether or not the agent
     # noticed them. Reporting them only when it did would make the section a
     # measure of attention rather than of what happened.
+    #
+    # Only the unrecoverable ones. A source that answered with nothing in the
+    # window is an ordinary quiet day; it belongs in the counts, and repeating
+    # it here once per source buries the things that actually need attention.
     for source_id in stats["gaps"]:
         anomalies.append(
             {
                 "kind": "collection_gap",
                 "source": source_id,
-                "detail": "the window opened after the newest article already seen from this "
-                          "source; anything published in between is gone from the feed",
+                "detail": "the feed no longer reaches back to the newest article already "
+                          "collected from it; what fell off in between cannot be recovered",
             }
         )
-    for source_id in stats["silent_sources"]:
+    for source_id in stats["source_errors"]:
         anomalies.append(
             {
-                "kind": "silent_source",
+                "kind": "source_error",
                 "source": source_id,
-                "detail": "the feed answered but had nothing in the window",
+                "detail": "the source could not be collected from this run",
             }
         )
 

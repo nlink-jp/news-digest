@@ -1052,17 +1052,34 @@ class TestWindow(unittest.TestCase):
         with self.assertRaises(window_lib.WindowError):
             window_lib.resolve("last Tuesday", None, tz=self.TZ, now=self.NOW)
 
-    def test_gap_is_detected_when_the_window_opens_after_the_last_article_seen(self):
-        win = window_lib.resolve("2026-08-07", None, tz=self.TZ, now=self.NOW)
-        self.assertTrue(window_lib.gap_before(win, "2026-08-01T00:00:00+09:00"))
+    def test_a_feed_that_rolled_past_the_marker_is_a_gap(self):
+        """Everything between what we last saw and what the feed still offers
+        has fallen off and cannot be recovered by re-running."""
+        self.assertTrue(
+            window_lib.rolled_past("2026-08-08T00:00:00+00:00", "2026-08-01T00:00:00+00:00")
+        )
 
-    def test_no_gap_when_the_window_overlaps_what_was_seen(self):
-        win = window_lib.resolve("2026-08-07", None, tz=self.TZ, now=self.NOW)
-        self.assertFalse(window_lib.gap_before(win, "2026-08-07T12:00:00+09:00"))
+    def test_a_feed_still_reaching_back_is_not_a_gap(self):
+        self.assertFalse(
+            window_lib.rolled_past("2026-07-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00")
+        )
+
+    def test_a_source_that_simply_has_not_published_lately_is_not_a_gap(self):
+        """The normal case. Comparing against the requested window instead
+        reported one of these for sixteen sources in a real run."""
+        self.assertFalse(
+            window_lib.rolled_past("2026-07-20T00:00:00+00:00", "2026-07-25T00:00:00+00:00")
+        )
+
+    def test_a_narrow_window_is_a_choice_not_a_loss(self):
+        """Gap detection must not depend on the window at all."""
+        self.assertFalse(window_lib.rolled_past("2026-08-01T00:00:00+00:00", None))
 
     def test_no_gap_for_a_source_never_collected(self):
-        win = window_lib.resolve("2026-08-07", None, tz=self.TZ, now=self.NOW)
-        self.assertFalse(window_lib.gap_before(win, None))
+        self.assertFalse(window_lib.rolled_past("2026-08-08T00:00:00+00:00", None))
+
+    def test_an_unparseable_timestamp_does_not_invent_a_gap(self):
+        self.assertFalse(window_lib.rolled_past("soon", "2026-08-01T00:00:00+00:00"))
 
 
 # ────────────────────────────────────────────────────────────────
@@ -1388,7 +1405,7 @@ enabled = false
         _, stats = self._outputs()
         self.assertIn("alpha", stats["silent_sources"])
 
-    def test_a_gap_is_reported_when_the_window_opens_after_what_was_seen(self):
+    def test_a_gap_is_reported_when_the_feed_rolled_past_the_marker(self):
         store = state_lib.Store(self.root / "data" / "state" / "sources.json")
         store.get("alpha").last_seen_published_at = "2026-07-01T00:00:00+00:00"
         store.save()
@@ -1396,6 +1413,17 @@ enabled = false
         self._run()
         _, stats = self._outputs()
         self.assertIn("alpha", stats["gaps"])
+
+    def test_a_quiet_source_is_not_reported_as_a_gap(self):
+        """A real run reported sixteen of these, which buried the one thing
+        in the anomalies section that mattered."""
+        store = state_lib.Store(self.root / "data" / "state" / "sources.json")
+        store.get("alpha").last_seen_published_at = "2026-08-09T00:00:00+00:00"
+        store.save()
+        self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
+        self._run()
+        _, stats = self._outputs()
+        self.assertEqual(stats["gaps"], [])
 
     def test_selecting_one_source_collects_only_that_one(self):
         self._fake_network({"alpha.example": FakeResponse(feed("rss2.xml"))})
@@ -2257,10 +2285,20 @@ class TestBuildDigestEndToEnd(unittest.TestCase):
         records = [article("sha1:1", "A headline")]
         digest = self._build(
             records, [self._verdict("sha1:1", "skim")],
-            collect_stats={"gaps": ["alpha"], "silent_sources": ["beta"]},
+            collect_stats={"gaps": ["alpha"], "errors": ["beta"]},
         )
         kinds = {a["kind"] for a in digest["anomalies"]}
-        self.assertEqual(kinds, {"collection_gap", "silent_source"})
+        self.assertEqual(kinds, {"collection_gap", "source_error"})
+
+    def test_a_quiet_source_is_counted_not_flagged(self):
+        """One line per silent source buries the entries that need action."""
+        records = [article("sha1:1", "A headline")]
+        digest = self._build(
+            records, [self._verdict("sha1:1", "skim")],
+            collect_stats={"silent_sources": ["a", "b", "c"]},
+        )
+        self.assertEqual(digest["anomalies"], [])
+        self.assertEqual(digest["stats"]["silent_sources"], ["a", "b", "c"])
 
     def test_the_agents_anomalies_are_kept_alongside(self):
         records = [article("sha1:1", "A headline")]
