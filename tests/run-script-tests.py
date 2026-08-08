@@ -25,11 +25,14 @@ sys.path.insert(0, str(SCRIPTS))
 
 import collect  # noqa: E402
 import collectors  # noqa: E402
+import apply_table  # noqa: E402
+import merge  # noqa: E402
 import prefilter  # noqa: E402
 from lib import corpus, http, profile, records  # noqa: E402
 from lib import filters as filters_lib  # noqa: E402
 from lib import seen as seen_lib  # noqa: E402
 from lib import stories as stories_lib  # noqa: E402
+from lib import triage as triage_lib  # noqa: E402
 from lib import sources as sources_lib  # noqa: E402
 from lib import state as state_lib  # noqa: E402
 from lib import window as window_lib  # noqa: E402
@@ -1798,6 +1801,254 @@ class TestStoryContext(unittest.TestCase):
         self.assertEqual(
             stories_lib.next_id(root, "2026", taken={"story-2026-0002"}), "story-2026-0003"
         )
+
+
+# ────────────────────────────────────────────────────────────────
+# Deriving priority from the agent's scores
+# ────────────────────────────────────────────────────────────────
+
+
+def scored_entry(id_="sha1:1", why="A named fact.", **axes):
+    base = {"novelty": 3, "significance": 2, "relevance": 2}
+    base.update(axes)
+    return {"id": id_, "axes": base, "why": why}
+
+
+class TestApplyTable(unittest.TestCase):
+    def setUp(self):
+        self.prof = profile.load(PROFILES, "security-news")
+        self.candidates = [article("sha1:1"), article("sha1:2", tier="community")]
+
+    def _apply(self, entries, candidates=None):
+        return triage_lib.apply(entries, candidates or self.candidates, self.prof)
+
+    def test_priority_is_derived_not_read(self):
+        result = self._apply([scored_entry("sha1:1"), scored_entry("sha1:2")])
+        self.assertTrue(all(item.priority in self.prof.priorities for item in result))
+
+    def test_credibility_comes_from_the_source_tier(self):
+        result = {item.id: item for item in self._apply([scored_entry("sha1:1"), scored_entry("sha1:2")])}
+        self.assertEqual(result["sha1:1"].credibility, "primary")
+        self.assertEqual(result["sha1:2"].credibility, "community")
+
+    def test_the_same_scores_can_decide_differently_by_source(self):
+        """The world-facing path to must_read requires a source that
+        establishes facts; the direct-hit path does not."""
+        entries = [
+            scored_entry("sha1:1", significance=3, relevance=2),
+            scored_entry("sha1:2", significance=3, relevance=2),
+        ]
+        result = {item.id: item.priority for item in self._apply(entries)}
+        self.assertEqual(result["sha1:1"], "must_read")
+        self.assertEqual(result["sha1:2"], "should_read")
+
+    def test_writing_a_priority_is_refused(self):
+        entry = scored_entry("sha1:1")
+        entry["priority"] = "must_read"
+        with self.assertRaises(triage_lib.TriageError) as ctx:
+            self._apply([entry, scored_entry("sha1:2")])
+        self.assertIn("derived", "\n".join(ctx.exception.problems))
+
+    def test_an_unscored_candidate_is_refused(self):
+        """A missing entry means an article silently vanishes."""
+        with self.assertRaises(triage_lib.TriageError) as ctx:
+            self._apply([scored_entry("sha1:1")])
+        self.assertIn("sha1:2", "\n".join(ctx.exception.problems))
+
+    def test_an_invented_id_is_refused(self):
+        entries = [scored_entry("sha1:1"), scored_entry("sha1:2"), scored_entry("sha1:99")]
+        with self.assertRaises(triage_lib.TriageError) as ctx:
+            self._apply(entries)
+        self.assertIn("sha1:99", "\n".join(ctx.exception.problems))
+
+    def test_a_missing_axis_is_refused(self):
+        entry = scored_entry("sha1:1")
+        del entry["axes"]["relevance"]
+        with self.assertRaises(triage_lib.TriageError) as ctx:
+            self._apply([entry, scored_entry("sha1:2")])
+        self.assertIn("relevance", "\n".join(ctx.exception.problems))
+
+    def test_an_out_of_range_score_is_refused(self):
+        with self.assertRaises(triage_lib.TriageError):
+            self._apply([scored_entry("sha1:1", novelty=7), scored_entry("sha1:2")])
+
+    def test_an_unknown_axis_is_refused(self):
+        entry = scored_entry("sha1:1")
+        entry["axes"]["urgency"] = 2
+        with self.assertRaises(triage_lib.TriageError) as ctx:
+            self._apply([entry, scored_entry("sha1:2")])
+        self.assertIn("urgency", "\n".join(ctx.exception.problems))
+
+    def test_an_empty_rationale_is_refused(self):
+        with self.assertRaises(triage_lib.TriageError):
+            self._apply([scored_entry("sha1:1", why="  "), scored_entry("sha1:2")])
+
+    def test_a_duplicate_entry_is_refused(self):
+        entries = [scored_entry("sha1:1"), scored_entry("sha1:1"), scored_entry("sha1:2")]
+        with self.assertRaises(triage_lib.TriageError):
+            self._apply(entries)
+
+    def test_every_problem_is_reported_at_once(self):
+        """One error per run would be one round trip per error."""
+        entries = [scored_entry("sha1:1", novelty=9, why=""), scored_entry("sha1:99")]
+        with self.assertRaises(triage_lib.TriageError) as ctx:
+            self._apply(entries)
+        self.assertGreaterEqual(len(ctx.exception.problems), 3)
+
+    def test_the_output_records_which_rule_decided(self):
+        result = self._apply([scored_entry("sha1:1"), scored_entry("sha1:2")])
+        payload = result[0].as_dict(self.prof)
+        self.assertIn("decided_by", payload)
+        self.assertEqual(payload["profile"], "security-news")
+        self.assertEqual(payload["profile_version"], self.prof.version)
+
+
+# ────────────────────────────────────────────────────────────────
+# Persisting into the corpus
+# ────────────────────────────────────────────────────────────────
+
+
+class TestMerge(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / corpus.MARKER).write_text(NEWSRC, encoding="utf-8")
+        self.work = self.root / ".work"
+        self.work.mkdir()
+        self.corpus = corpus.load(self.root)
+
+    def _records(self, n=2, **kw):
+        out = []
+        for i in range(n):
+            record = article(f"sha1:{i}", f"Headline number {i}", **kw)
+            record["canonical_key"] = f"example.com/a{i}"
+            record["collected_at"] = "2026-08-08T09:00:00+00:00"
+            record["prefilter"] = {"verdict": "candidate", "rule_id": None, "reason": None}
+            out.append(record)
+        return out
+
+    def _run(self, records, scored, extra=()):
+        (self.work / "prefiltered.jsonl").write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8"
+        )
+        (self.work / "triage.json").write_text(
+            json.dumps(scored, ensure_ascii=False), encoding="utf-8"
+        )
+        argv = sys.argv
+        sys.argv = [
+            "merge.py", "--repo", str(self.root),
+            "--prefiltered", str(self.work / "prefiltered.jsonl"),
+            "--triage", str(self.work / "triage.json"),
+            "--story-updates-out", str(self.work / "story-updates.json"),
+            *extra,
+        ]
+        try:
+            return merge.main()
+        finally:
+            sys.argv = argv
+
+    def _articles(self):
+        path = self.corpus.article_file("2026-08-08")
+        if not path.is_file():
+            return []
+        return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    def _verdict(self, priority="skim", **kw):
+        base = {
+            "id": "sha1:0", "profile": "generic", "profile_version": 1,
+            "axes": {"novelty": 3, "significance": 1, "relevance": 1},
+            "credibility": "primary", "priority": priority, "decided_by": "rule 5",
+            "why": "A named fact.", "story_id": None, "new_story": None,
+        }
+        base.update(kw)
+        return base
+
+    def test_articles_are_stored_partitioned_by_published_date(self):
+        self.assertEqual(self._run(self._records(), [self._verdict()]), 0)
+        self.assertEqual(len(self._articles()), 2)
+
+    def test_dropped_articles_are_stored_too(self):
+        records = self._records()
+        records[1]["prefilter"] = {"verdict": "drop", "rule_id": "noise:sale", "reason": "promo"}
+        self._run(records, [self._verdict()])
+        stored = {r["id"]: r for r in self._articles()}
+        self.assertEqual(stored["sha1:1"]["prefilter"]["rule_id"], "noise:sale")
+
+    def test_the_verdict_is_attached_to_the_article(self):
+        self._run(self._records(), [self._verdict(priority="must_read")])
+        stored = {r["id"]: r for r in self._articles()}
+        self.assertEqual(stored["sha1:0"]["triage"]["priority"], "must_read")
+        self.assertIsNone(stored["sha1:1"].get("triage"))
+
+    def test_running_twice_changes_nothing(self):
+        """A run that failed halfway must be safe to simply repeat."""
+        records, scored = self._records(), [self._verdict()]
+        self._run(records, scored)
+        first = {
+            p.relative_to(self.root): p.read_bytes()
+            for p in sorted(self.root.rglob("*")) if p.is_file() and ".work" not in str(p)
+        }
+        self._run(records, scored)
+        second = {
+            p.relative_to(self.root): p.read_bytes()
+            for p in sorted(self.root.rglob("*")) if p.is_file() and ".work" not in str(p)
+        }
+        self.assertEqual(first, second)
+
+    def test_every_collected_article_enters_the_seen_index(self):
+        """Including dropped ones — otherwise they are re-collected and
+        re-judged every day."""
+        records = self._records()
+        records[1]["prefilter"] = {"verdict": "drop", "rule_id": "noise:sale", "reason": "promo"}
+        self._run(records, [self._verdict()])
+        index = seen_lib.load(self.corpus.seen_files())
+        self.assertEqual(set(index), {"sha1:0", "sha1:1"})
+
+    def test_a_new_story_is_created_and_the_id_lands_on_the_article(self):
+        verdict = self._verdict(new_story={"title": "Example Gateway intrusion"})
+        self._run(self._records(), [verdict])
+        stories = list(stories_lib.read_all(self.corpus.stories_dir))
+        self.assertEqual(len(stories), 1)
+        self.assertEqual(stories[0]["title"], "Example Gateway intrusion")
+        self.assertEqual(stories[0]["article_ids"], ["sha1:0"])
+        stored = {r["id"]: r for r in self._articles()}
+        self.assertEqual(stored["sha1:0"]["triage"]["story_id"], stories[0]["id"])
+
+    def test_an_article_joins_an_existing_story_once(self):
+        self._run(self._records(), [self._verdict(new_story={"title": "Ongoing"})])
+        story_id = list(stories_lib.read_all(self.corpus.stories_dir))[0]["id"]
+        self._run(self._records(), [self._verdict(id="sha1:1", story_id=story_id)])
+        self._run(self._records(), [self._verdict(id="sha1:1", story_id=story_id)])
+        story = list(stories_lib.read_all(self.corpus.stories_dir))[0]
+        self.assertEqual(story["article_ids"], ["sha1:0", "sha1:1"])
+        self.assertEqual(len(story["timeline"]), 2)
+
+    def test_an_unknown_story_is_warned_about_not_fatal(self):
+        code = self._run(self._records(), [self._verdict(story_id="story-2026-9999")])
+        self.assertEqual(code, 0)
+        stored = {r["id"]: r for r in self._articles()}
+        self.assertIsNone(stored["sha1:0"]["triage"]["story_id"])
+
+    def test_story_updates_are_reported_for_the_digest(self):
+        self._run(self._records(), [self._verdict(new_story={"title": "Fresh"})])
+        updates = json.loads((self.work / "story-updates.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(updates["created"]), 1)
+        self.assertEqual(updates["created"][0]["title"], "Fresh")
+
+    def test_triage_naming_an_article_that_was_not_collected_is_refused(self):
+        self.assertEqual(self._run(self._records(), [self._verdict(id="sha1:99")]), 2)
+
+    def test_a_dry_run_writes_nothing(self):
+        self._run(self._records(), [self._verdict()], extra=("--dry-run",))
+        self.assertFalse(self.corpus.articles_dir.exists())
+
+    def test_two_new_stories_in_one_run_get_distinct_ids(self):
+        verdicts = [
+            self._verdict(id="sha1:0", new_story={"title": "First matter"}),
+            self._verdict(id="sha1:1", new_story={"title": "Second matter"}),
+        ]
+        self._run(self._records(), verdicts)
+        ids = {s["id"] for s in stories_lib.read_all(self.corpus.stories_dir)}
+        self.assertEqual(len(ids), 2)
 
 
 if __name__ == "__main__":

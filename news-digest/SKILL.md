@@ -143,26 +143,26 @@ Write an array of entries to `WORK/triage.json`, one per candidate:
 - Create a `new_story` only when follow-up coverage is likely.
 - You have not read the article bodies yet. Do not write summaries here.
 
-```bash
-python3 SKILL_DIR/scripts/validate.py --part triage WORK/triage.json \
-  --candidates WORK/candidates.jsonl --repo REPO
-```
-
-On `ERROR`, fix `WORK/triage.json` and re-validate. Do not re-collect.
-
 ## Phase 4 — Derive priorities and merge into the corpus
 
 ```bash
 python3 SKILL_DIR/scripts/apply_table.py --repo REPO \
-  --triage WORK/triage.json --out WORK/triage-scored.json
+  --triage WORK/triage.json --candidates WORK/candidates.jsonl \
+  --out WORK/triage-scored.json
+```
+
+This checks your scores and applies the profile's decision table. It reports
+every problem at once — on `ERROR`, fix `WORK/triage.json` and run it again.
+Do not re-collect; nothing upstream has changed.
+
+```bash
 python3 SKILL_DIR/scripts/merge.py --repo REPO \
   --prefiltered WORK/prefiltered.jsonl --triage WORK/triage-scored.json \
   --story-updates-out WORK/story-updates.json
 ```
 
-`apply_table.py` applies the profile's decision table. `merge.py` persists
-articles, creates and updates stories, and updates the seen index. Both are
-idempotent — on failure, re-run from here.
+`merge.py` persists articles, creates and updates stories, and updates the
+seen index. It is idempotent — if it fails partway, run it again.
 
 Read `WORK/triage-scored.json` to see which articles became `must_read`.
 
