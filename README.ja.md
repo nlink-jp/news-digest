@@ -80,7 +80,8 @@ make install
 | `--dry-run` | — | 通知も commit もしない |
 | `--no-post` / `--no-commit` | — | 個別に抑止 |
 
-サニタイズ済みの初期設定は `examples/config/` に同梱予定。
+コピーして使えるコーパスの雛形が `news-digest/examples/corpus/` にある。
+手順は `news-digest/references/setting-up-a-corpus.md`。
 
 ## 必要なもの
 

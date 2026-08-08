@@ -1,0 +1,38 @@
+# The contract between this corpus and the news-digest skill.
+#
+# Copy this file, and the config/ directory beside it, to the root of a new
+# repository. Keep that repository private: config/interests.toml describes
+# what you do and what you run, and data/ accumulates what you watch.
+
+[repo]
+# Formats this corpus is written in. The skill refuses to run against a
+# version it does not support, rather than writing records the corpus cannot
+# read back. Do not raise these by hand.
+config_version = 1
+schema_version = 1
+
+# The evaluation profile. `generic` is the domain-neutral base;
+# `security-news` specializes it. Run
+#   python3 <skill>/scripts/check_config.py --repo .
+# after changing this: a profile states what config/interests.toml must
+# provide, and the two must fit.
+profile = "security-news"
+
+[paths]
+config = "config"
+data = "data"
+digests = "digests"
+
+# Where the digest goes. This names a destination, not a transport: the skill
+# resolves a messaging tool at run time from whatever it can reach. Remove the
+# section entirely to generate digests without sending them.
+#
+# The channel ID below is a placeholder. A real one belongs only in your own
+# private corpus — never in a public repository.
+[[notify]]
+id = "main"
+kind = "slack"
+channel = "C0XXXXXXXXX"
+# Hang parts 2..n under the first message, so a long digest does not push the
+# channel around.
+thread = true

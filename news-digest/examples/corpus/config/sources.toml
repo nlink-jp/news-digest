@@ -1,0 +1,109 @@
+# What to collect.
+#
+# Every value here is copied into an article's `origin` at collection time and
+# never rewritten. Editing this file changes what is collected next; it does
+# not change history. That is what makes the corpus traceable — and it means a
+# `weight` you fix today does not retroactively change last month's records.
+#
+# Fields:
+#   id        required. Lowercase letters, digits, hyphens. The stable key used
+#             in article records, filter rules, and statistics. Renaming one
+#             breaks the link to everything already collected under it.
+#   name      required. For humans, shown in the digest.
+#   url       required. http(s).
+#   type      optional, default "rss". One of: rss (reads RSS 2.0, Atom, and
+#             RDF), jsonfeed.
+#   category  required. A free-form label you choose. Filter rules address
+#             categories rather than listing feed IDs, so pick labels you would
+#             want to filter as a group.
+#   lang      required. Sets the Accept-Language header.
+#   tier      required. How the source stands to the facts it reports:
+#               primary    — the party publishing about itself: a vendor
+#                            advisory, an authority, an affected organization
+#               analysis   — first-party research and investigation
+#               secondary  — reporting on what others published
+#               community  — forums, social, aggregators
+#             This becomes `credibility`, which a decision table may consult
+#             and which is never judged per article.
+#   weight    optional, default 1.0. Ordering when there are more candidates
+#             than the run's budget. Not a relevance multiplier.
+#   enabled   optional, default true.
+#   accept_language  optional. Only when a feed serves different content by
+#             language and the default derived from `lang` is wrong.
+#   note      optional. Why this source is here, what it is good for, what is
+#             wrong with it. Worth writing — you will not remember.
+#
+# A source needing a token declares the environment variable holding it:
+#   [source.auth]
+#   token_env = "SOME_API_TOKEN"
+#   header    = "Authorization: Bearer {token}"   # optional, this is the default
+# A literal token in this file is rejected.
+
+# ─────────────────────────────────────────────────────────────
+# Replace everything below with your own feeds.
+# ─────────────────────────────────────────────────────────────
+
+[[source]]
+id = "cisa-advisories"
+name = "CISA Cybersecurity Advisories"
+url = "https://www.cisa.gov/cybersecurity-advisories/all.xml"
+category = "advisories"
+lang = "en"
+tier = "primary"
+weight = 1.5
+note = """An authority publishing advisories and known-exploited additions. \
+Note that cisa.gov refuses automated retrieval of article bodies, so items \
+from this source are judged on the headline and feed excerpt."""
+
+[[source]]
+id = "jpcert"
+name = "JPCERT/CC"
+url = "https://www.jpcert.or.jp/rss/jpcert.rdf"
+category = "advisories"
+lang = "ja"
+tier = "primary"
+weight = 1.5
+note = "RDF feed; the collector reads it as RSS."
+
+[[source]]
+id = "example-research"
+name = "Example Research Blog"
+url = "https://research.example.com/feed/"
+category = "research"
+lang = "en"
+tier = "analysis"
+weight = 1.2
+note = "Placeholder. A vendor or independent research blog you actually read."
+
+[[source]]
+id = "example-news"
+name = "Example Security News"
+url = "https://news.example.com/feed"
+category = "news"
+lang = "en"
+tier = "secondary"
+note = "Placeholder. Reporting rather than first-hand facts — hence secondary."
+
+[[source]]
+id = "example-jsonfeed"
+name = "Example JSON Feed"
+url = "https://blog.example.com/feed.json"
+type = "jsonfeed"
+category = "research"
+lang = "en"
+tier = "analysis"
+note = "Placeholder, showing a non-RSS collector."
+
+# A general-interest feed you keep for the occasional security story. Pair a
+# category like this with a [gate] in filters.toml so it only contributes when
+# a keep pattern matches — the rest is still collected and stored, just not
+# put in front of the evaluation step.
+[[source]]
+id = "example-general"
+name = "Example General Tech"
+url = "https://tech.example.com/rss"
+category = "general"
+lang = "en"
+tier = "secondary"
+weight = 0.5
+note = "Placeholder. Mostly noise, occasionally the first report of something."

@@ -1,0 +1,120 @@
+# Mechanical noise removal, before anything is evaluated.
+#
+# The purpose is to spend judgement on articles that need it — not to make the
+# judgement. Anything a regular expression cannot settle belongs downstream.
+#
+# Nothing is discarded here: a dropped article is still stored, with the rule
+# that dropped it. The record of why something did not need reading is half of
+# what the corpus is for, and it is also how you tell whether a rule is too
+# broad.
+#
+# Order of evaluation, per article:
+#   1. already in the corpus       -> drop
+#   2. title too short to judge    -> drop
+#   3. [keep] matches              -> candidate, skipping 4 and 5
+#   4. [gate] applies              -> drop
+#   5. a [[rule]] matches          -> drop
+#   6. otherwise                   -> candidate
+#
+# `keep` sitting above the gate and the rules is what makes those safe to
+# write aggressively.
+
+# ─────────────────────────────────────────────────────────────
+# keep — the rescue list, matched against the title
+#
+# A noisy feed still carries the occasional article that matters. Anything
+# matching here survives every rule below. When prefiltering drops something
+# it should not have, add a pattern here first.
+# ─────────────────────────────────────────────────────────────
+[keep]
+title_regex = [
+  "(?i)vulnerabilit|zero-?day|exploit|ransomware|malware|breach|data leak",
+  "(?i)backdoor|supply chain attack|CVE-[0-9]{4}-[0-9]+|advisory",
+  "脆弱性|ぜい弱性|セキュリテ[ィイ]|緊急アップデート",
+  "不正アクセス|情報漏[えけ]い|漏洩|流出|改ざん|乗っ取り",
+  "ランサム|マルウェア|フィッシング|サイバー攻撃|標的型",
+]
+
+# ─────────────────────────────────────────────────────────────
+# gate — sources that only contribute when a keep pattern matches
+#
+# For feeds you subscribe to for one narrow reason. Their other articles are
+# still collected and stored; they simply do not reach the evaluation step.
+#
+# Addressed by category, so adding another general-interest feed means
+# labelling it `general` rather than editing this list.
+# ─────────────────────────────────────────────────────────────
+[gate]
+keep_only_categories = ["general"]
+# keep_only_sources = ["one-specific-feed"]
+# keep_only_tiers = ["community"]
+
+# ─────────────────────────────────────────────────────────────
+# rule — what to drop
+#
+# Each rule needs an id and at least one of title_regex / url_regex.
+# A rule applies to an article when any of its selectors matches:
+#   categories = [...]   sources = [...]   tiers = [...]
+# With no selector, it applies everywhere.
+#
+# Naming a source id that does not exist in sources.toml is an error, not a
+# rule that quietly stops firing.
+# ─────────────────────────────────────────────────────────────
+
+[[rule]]
+id = "noise:promotion"
+reason = "discounts, sales, and campaigns"
+categories = ["general", "news"]
+title_regex = [
+  "(?i)\\bsale\\b|\\d+% off|black friday|prime day",
+  "セール|割引|クーポン|ポイント還元|キャンペーンを開始",
+]
+
+[[rule]]
+id = "noise:event"
+reason = "webinar and conference announcements"
+title_regex = [
+  "(?i)webinar|conference registration|call for papers",
+  "セミナー|ウェビナー|勉強会|参加者(を)?募集",
+]
+
+[[rule]]
+id = "noise:rumour"
+reason = "unconfirmed rumours and teasers"
+tiers = ["community"]
+title_regex = [
+  "(?i)\\brumou?r|reportedly|allegedly|leaked images",
+  "の?噂|ウワサ|リーク情報|ティザー",
+]
+
+[[rule]]
+id = "noise:status-resolved"
+reason = "service incidents that are already over"
+categories = ["status"]
+title_regex = [
+  "(?i)^resolved\\b|has been resolved|service (is|has) (fully )?(restored|recovered)",
+  "^解決済み[:：]|^復旧|復旧しました$",
+]
+
+[[rule]]
+id = "noise:pr"
+reason = "press releases and partnership announcements"
+title_regex = [
+  "(?i)^PR:|\\[PR\\]|announces? a partnership|signs? an agreement",
+  "業務提携|資本提携|パートナーシップを締結",
+]
+
+# ─────────────────────────────────────────────────────────────
+# limits
+# ─────────────────────────────────────────────────────────────
+[limits]
+# Candidates evaluated in one run. Beyond this, articles are kept with an
+# `overflow` verdict rather than discarded, ordered by source weight and
+# recency. Raise it if the overflow count is regularly non-zero — or tighten
+# the rules above, which is usually the better answer.
+max_candidates = 120
+
+# A title shorter than this cannot be judged from, so it is dropped. Feeds
+# whose entries have no title get one derived from the opening sentence
+# before this applies.
+min_title_chars = 8

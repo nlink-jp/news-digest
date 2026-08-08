@@ -90,7 +90,8 @@ make install
 | `--dry-run` | — | Neither notify nor commit |
 | `--no-post` / `--no-commit` | — | Suppress one or the other |
 
-Sanitized starting configuration will ship in `examples/config/`.
+A ready-to-copy corpus template is in `news-digest/examples/corpus/`; see
+`news-digest/references/setting-up-a-corpus.md`.
 
 ## Requirements
 

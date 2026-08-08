@@ -2653,5 +2653,70 @@ class TestParseArgs(unittest.TestCase):
             sys.argv = argv
 
 
+# ────────────────────────────────────────────────────────────────
+# The shipped corpus template
+# ────────────────────────────────────────────────────────────────
+
+
+class TestExampleCorpus(unittest.TestCase):
+    """A template that does not load is worse than no template: it is the
+    first thing a new user copies, and its failure looks like their mistake."""
+
+    EXAMPLE = SKILL / "examples" / "corpus"
+
+    def test_the_template_is_a_corpus(self):
+        c = corpus.load(self.EXAMPLE)
+        self.assertEqual(c.profile_name, "security-news")
+        self.assertEqual(len(c.destinations), 1)
+
+    def test_the_template_names_a_profile_that_ships(self):
+        c = corpus.load(self.EXAMPLE)
+        self.assertIn(c.profile_name, profile.available(PROFILES))
+
+    def test_its_source_list_loads(self):
+        c = corpus.load(self.EXAMPLE)
+        loaded = sources_lib.load(c.sources_file, tuple(collectors.available()))
+        self.assertGreater(len(loaded), 1)
+        self.assertIn("jsonfeed", {s.type for s in loaded})
+
+    def test_its_filters_load_and_reference_only_real_sources(self):
+        c = corpus.load(self.EXAMPLE)
+        ids = {s.id for s in sources_lib.load(c.sources_file, tuple(collectors.available()))}
+        rules = filters_lib.load(c.filters_file, ids)
+        self.assertTrue(rules.keep)
+        self.assertGreater(len(rules.rules), 1)
+
+    def test_its_gate_is_addressed_by_category_not_by_feed_id(self):
+        c = corpus.load(self.EXAMPLE)
+        rules = filters_lib.load(c.filters_file)
+        self.assertTrue(rules.gate.categories)
+        self.assertFalse(rules.gate.sources)
+
+    def test_it_passes_its_own_pre_flight_check(self):
+        argv = sys.argv
+        sys.argv = ["check_config.py", "--repo", str(self.EXAMPLE), "--skill-dir", str(SKILL)]
+        try:
+            self.assertEqual(check_config.main(), 0)
+        finally:
+            sys.argv = argv
+
+    def test_it_satisfies_the_profile_it_names(self):
+        prof = profile.load(PROFILES, "security-news")
+        errors, warnings = [], []
+        check_config.check_interests(
+            corpus.load(self.EXAMPLE).interests_file, prof, errors, warnings
+        )
+        self.assertEqual(errors, [])
+
+    def test_it_carries_no_real_destination(self):
+        """A real channel identifier belongs only in a private corpus."""
+        channel = corpus.load(self.EXAMPLE).destinations[0].channel
+        self.assertRegex(channel, r"^C0X+$")
+
+    def test_its_placeholders_are_marked_as_such(self):
+        text = (self.EXAMPLE / "config" / "interests.toml").read_text(encoding="utf-8")
+        self.assertIn("Placeholder", text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

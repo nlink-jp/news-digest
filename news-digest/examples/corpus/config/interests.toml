@@ -1,0 +1,101 @@
+# Who is reading, and what they are reading for.
+#
+# The `relevance` axis is scored against this file, so its accuracy sets the
+# accuracy of the digest more than anything else here. Everything in it is
+# specific to you: this is the main reason a corpus repository stays private.
+#
+# The shape is decided by the profile named in ../.newsrc.toml — this example
+# matches `security-news`. `check_config.py` refuses to run when the two do
+# not fit, rather than letting relevance be scored against nothing.
+#
+# Expect to be wrong at first. Treat the first weeks as calibration: when a
+# digest surfaces something you did not want, or misses something you did, the
+# fix is usually here rather than in the rules.
+
+[org]
+# What you do, and in whose interest you read the news. Whether you read as a
+# potential victim, as someone who advises others, or both — the two produce
+# different scores for the same article.
+#
+# Replace this entirely.
+description = """
+Placeholder. Describe the reader in two or three sentences: what the \
+organization does, whose systems it is responsible for, and what kind of \
+decision a piece of news might trigger."""
+
+# ─────────────────────────────────────────────────────────────
+# topics — what raises relevance
+#
+# Write statements, not keywords. "Vulnerabilities in edge devices that are
+# being exploited" scores better than "vulnerability", because the axis is
+# being scored by something that reads.
+# ─────────────────────────────────────────────────────────────
+[topics]
+# Optional. Subjects that reach relevance 3 on their own.
+#
+# Keep this short and literal. Putting "other organizations' incidents" here
+# promotes every incident report to must_read, at which point the category has
+# stopped meaning anything — which is the failure this tool exists to avoid.
+critical = [
+  "vulnerabilities in the products listed under stack.watch_products",
+  "vulnerabilities with confirmed exploitation in the wild",
+  "compromise of a vendor or service this organization depends on",
+]
+
+# Required. Material worth acting on or passing along.
+high = [
+  "supply-chain compromise: poisoned packages, vendor breaches, tampered updates",
+  "authentication and identity infrastructure: SSO, SAML/OIDC, directory services",
+  "edge devices: VPN concentrators, firewalls, routers, remote management",
+  "incidents at comparable organizations where the intrusion path is described",
+  "regulatory notices and guidance from authorities with jurisdiction here",
+]
+
+# Optional. Worth knowing about, rarely acted on.
+medium = [
+  "threat actor profiles and campaign tracking",
+  "detection engineering and incident response technique write-ups",
+  "significant changes to security tooling in use",
+]
+
+# ─────────────────────────────────────────────────────────────
+# stack — what you actually run
+#
+# The largest single input to relevance 3. Be concrete and be complete;
+# a product missing here is a product whose vulnerability reads as somebody
+# else's problem.
+# ─────────────────────────────────────────────────────────────
+[stack]
+platforms = ["Placeholder: the operating systems and clouds in use"]
+languages = ["Placeholder: languages and package ecosystems you ship"]
+tools = ["Placeholder: software your team operates directly"]
+
+# Required. Products whose vulnerabilities mean somebody has to go and check —
+# yours and your customers'.
+watch_products = [
+  "Placeholder: edge and remote-access products in the environments you cover",
+  "Placeholder: identity providers and directory services",
+  "Placeholder: widely deployed server software you are responsible for",
+]
+
+# ─────────────────────────────────────────────────────────────
+# downweight — what to push down
+#
+# A safety net for things that slip past filters.toml, not a substitute for it.
+# ─────────────────────────────────────────────────────────────
+[downweight]
+topics = [
+  "consumer gadget reviews and specification comparisons",
+  "funding rounds and acquisitions with no stated security consequence",
+  "pricing and availability announcements",
+]
+
+# ─────────────────────────────────────────────────────────────
+# digest — output preferences
+# ─────────────────────────────────────────────────────────────
+[digest]
+# Language for the generated digest.
+lang = "en"
+
+# Optional. Overrides the profile layout's item limit for this corpus.
+# max_items = 25

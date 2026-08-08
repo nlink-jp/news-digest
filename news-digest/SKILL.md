@@ -41,6 +41,8 @@ Everything except steps 3 and 5 is deterministic. When the wording of the
 output is wrong, fix `compile.py` — do not re-render by hand.
 
 Record shapes are documented in [references/data-model.md](references/data-model.md).
+If the user has no corpus yet, [references/setting-up-a-corpus.md](references/setting-up-a-corpus.md)
+describes how to create one from the template in `examples/corpus/`.
 
 ## Arguments
 
