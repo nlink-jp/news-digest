@@ -11,10 +11,16 @@ from the record beside it.
 
 What must not disagree is the *content*, not the bytes. Destinations differ in
 what markup they accept, and a first real delivery proved the difference
-matters: an inline `[title](url)` link survived the file and was silently
-reduced to the title alone on the way to Slack-style mrkdwn, so the digest
-arrived naming articles nobody could open. The `slack` flavour emits the
-address on its own line, which no dialect can drop.
+matters: an inline `[title](url)` link survived into the file and was silently
+reduced to the title alone on the way to Slack, so the digest arrived naming
+articles nobody could open. The `slack` flavour puts the address on its own
+line, which no dialect can drop, and omits headings that dialect does not have.
+
+Output is built as a list of **blocks** — a heading, one item, one list
+section — which `render` joins. Delivery needs those boundaries to split a
+long digest without cutting an item in half, and a splitter that recovered
+them by matching markup breaks on the first flavour that spells the markup
+differently. That happened, once, immediately.
 
 Standard library only.
 """
@@ -31,14 +37,6 @@ MARKDOWN = "markdown"
 SLACK = "slack"
 FLAVORS = (MARKDOWN, SLACK)
 
-PRIORITY_LABEL = {
-    "must_read": "must read",
-    "should_read": "worth reading",
-    "skim": "skim",
-    "minor_update": "no new facts",
-    "archive": "archived",
-}
-
 
 def escape(text: Any) -> str:
     """Neutralize Markdown control characters in third-party text.
@@ -52,9 +50,9 @@ def escape(text: Any) -> str:
     return out.replace("\n", " ").strip()
 
 
-def _section_heading(title: str, flavor: str) -> str:
-    """`##` in a file; bold for a destination whose dialect has no headings."""
-    return f"## {title}" if flavor == MARKDOWN else f"**{title}**"
+def _heading(title: str, flavor: str, level: int = 2) -> str:
+    """`#`-prefixed in a file; bold where the dialect has no headings."""
+    return f"{'#' * level} {title}" if flavor == MARKDOWN else f"**{title}**"
 
 
 def axis_badge(item: dict[str, Any]) -> str:
@@ -65,24 +63,22 @@ def axis_badge(item: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
-def render_item(item: dict[str, Any], lines: list[str], flavor: str = MARKDOWN) -> None:
+def render_item(item: dict[str, Any], flavor: str = MARKDOWN) -> str:
+    """One article, as a single block that must never be split."""
     title = escape(item.get("title") or "(untitled)")
     url = str(item.get("url") or "")
     linkable = url.startswith(("http://", "https://"))
+    lines: list[str] = []
 
     if flavor == SLACK:
         # The address goes on its own line, unadorned. An inline link is the
         # first thing a markup converter drops, and losing it turns the digest
         # into a list of things the reader cannot reach.
         lines.append(f"**{title}**")
-        lines.append("")
         if linkable:
-            lines.append(url)
-            lines.append("")
+            lines += ["", url]
     else:
-        heading = f"[{title}]({url})" if linkable else title
-        lines.append(f"### {heading}")
-        lines.append("")
+        lines.append(_heading(f"[{title}]({url})" if linkable else title, flavor, 3))
 
     meta = [escape(item.get("source") or "unknown source")]
     if item.get("published_at"):
@@ -90,64 +86,59 @@ def render_item(item: dict[str, Any], lines: list[str], flavor: str = MARKDOWN) 
     badge = axis_badge(item)
     if badge:
         meta.append(badge)
-    lines.append(f"*{' — '.join(meta)}*")
-    lines.append("")
+    lines += ["", f"*{' — '.join(meta)}*"]
 
     if item.get("summary"):
-        lines.append(escape(item["summary"]))
-        lines.append("")
+        lines += ["", escape(item["summary"])]
     elif item.get("priority") == "must_read":
         # Saying so is the point: a must-read whose body could not be fetched
         # was judged on its headline, and the reader should know that.
-        lines.append("*Body not retrieved — judged on the headline and feed excerpt.*")
-        lines.append("")
+        lines += ["", "*Body not retrieved — judged on the headline and feed excerpt.*"]
 
     if item.get("why"):
-        lines.append(f"**Why:** {escape(item['why'])}")
-        lines.append("")
+        lines += ["", f"**Why:** {escape(item['why'])}"]
+
+    return "\n".join(lines)
 
 
-def render_section(section: dict[str, Any], lines: list[str], flavor: str = MARKDOWN) -> None:
+def render_section(section: dict[str, Any], flavor: str = MARKDOWN) -> list[str]:
+    """A section as blocks. Item sections yield a heading plus one per item."""
     kind = section.get("kind", "items")
 
     if kind == "items":
         items = section.get("items") or []
         if not items:
             if section.get("empty_text"):
-                lines.append(_section_heading(section["title"], flavor))
-                lines.append("")
-                lines.append(f"*{escape(section['empty_text'])}*")
-                lines.append("")
-            return
-        lines.append(_section_heading(f"{section['title']} ({len(items)})", flavor))
-        lines.append("")
-        for item in items:
-            render_item(item, lines, flavor)
+                return [
+                    _heading(section["title"], flavor)
+                    + f"\n\n*{escape(section['empty_text'])}*"
+                ]
+            return []
+        # The heading travels with the first item. On its own it can be packed
+        # at the end of a message whose items went to the next one, leaving a
+        # section title announcing nothing.
+        rendered = [render_item(item, flavor) for item in items]
+        heading = _heading(f"{section['title']} ({len(items)})", flavor)
+        blocks = [f"{heading}\n\n{rendered[0]}"] + rendered[1:]
         if section.get("withheld"):
-            lines.append(f"*{section['withheld']} more not shown (item limit reached).*")
-            lines.append("")
-        return
+            blocks.append(f"*{section['withheld']} more not shown (item limit reached).*")
+        return blocks
 
     if kind == "story_updates":
         created = section.get("created") or []
         updated = section.get("updated") or []
         if not created and not updated:
-            return
-        lines.append(_section_heading(section["title"], flavor))
-        lines.append("")
-        for entry in created:
-            lines.append(f"- **New:** {escape(entry.get('title'))} (`{entry.get('id')}`)")
-        for entry in updated:
-            lines.append(f"- Updated: {escape(entry.get('title'))} (`{entry.get('id')}`)")
-        lines.append("")
-        return
+            return []
+        lines = [_heading(section["title"], flavor), ""]
+        lines += [f"- **New:** {escape(e.get('title'))} (`{e.get('id')}`)" for e in created]
+        lines += [f"- Updated: {escape(e.get('title'))} (`{e.get('id')}`)" for e in updated]
+        return ["\n".join(lines)]
 
     if kind == "stale_topics":
         topics = section.get("topics") or []
         if not topics:
-            return
-        lines.append(_section_heading(section["title"], flavor))
-        lines.append("")
+            return []
+        lines = [_heading(section["title"], flavor), ""]
         for topic in topics:
             sources = ", ".join(escape(s) for s in topic.get("sources") or [])
             detail = f" — {sources}" if sources else ""
@@ -155,41 +146,35 @@ def render_section(section: dict[str, Any], lines: list[str], flavor: str = MARK
                 f"- **{escape(topic.get('title'))}** ({topic.get('article_count')} article(s)"
                 f"{detail}): {escape(topic.get('reason'))}"
             )
-        lines.append("")
-        return
+        return ["\n".join(lines)]
 
     if kind == "anomalies":
         anomalies = section.get("anomalies") or []
         if not anomalies:
-            return
-        lines.append(_section_heading(section["title"], flavor))
-        lines.append("")
+            return []
+        lines = [_heading(section["title"], flavor), ""]
         for anomaly in anomalies:
             if isinstance(anomaly, dict):
                 where = anomaly.get("source") or anomaly.get("kind") or "—"
                 lines.append(f"- **{escape(where)}:** {escape(anomaly.get('detail'))}")
             else:
                 lines.append(f"- {escape(anomaly)}")
-        lines.append("")
-        return
+        return ["\n".join(lines)]
 
     if kind == "stats":
         stats = section.get("stats") or {}
-        lines.append(_section_heading(section["title"], flavor))
-        lines.append("")
-        by_priority = ", ".join(f"{k} {v}" for k, v in (stats.get("by_priority") or {}).items())
+        lines = [_heading(section["title"], flavor), ""]
         lines.append(
             f"- Collected {stats.get('collected', 0)} → "
             f"{stats.get('candidates', 0)} candidates → "
             f"{stats.get('evaluated', 0)} scored"
         )
+        by_priority = ", ".join(f"{k} {v}" for k, v in (stats.get("by_priority") or {}).items())
         if by_priority:
             lines.append(f"- Priorities: {by_priority}")
         dropped = stats.get("dropped_by_rule") or {}
         if dropped:
-            lines.append(
-                "- Dropped: " + ", ".join(f"{k} {v}" for k, v in sorted(dropped.items()))
-            )
+            lines.append("- Dropped: " + ", ".join(f"{k} {v}" for k, v in sorted(dropped.items())))
         for label, key in (
             ("Sources with errors", "source_errors"),
             ("Sources with nothing in window", "silent_sources"),
@@ -199,34 +184,35 @@ def render_section(section: dict[str, Any], lines: list[str], flavor: str = MARK
             values = stats.get(key) or []
             if values:
                 lines.append(f"- {label}: {', '.join(escape(v) for v in values)}")
-        lines.append("")
-        return
+        return ["\n".join(lines)]
+
+    return []
+
+
+def render_blocks(digest: dict[str, Any], flavor: str = MARKDOWN) -> list[str]:
+    """The digest as atomic blocks, in order. Delivery may reorder nothing and
+    split none of them."""
+    if flavor not in FLAVORS:
+        raise ValueError(f"unknown flavor {flavor!r} (known: {', '.join(FLAVORS)})")
+
+    blocks = [_heading(f"News digest — {escape(digest.get('date'))}", flavor, 1)]
+
+    if digest.get("natural_language_summary"):
+        blocks.append(escape(digest["natural_language_summary"]))
+
+    counts = (digest.get("stats") or {}).get("by_priority") or {}
+    blocks.append(
+        f"*{counts.get('must_read', 0)} must-read of {digest.get('items_total', 0)} scored "
+        f"({digest.get('profile')} profile).*"
+    )
+
+    for section in digest.get("sections") or []:
+        blocks += render_section(section, flavor)
+    return [b for b in blocks if b.strip()]
 
 
 def render(digest: dict[str, Any], flavor: str = MARKDOWN) -> str:
-    if flavor not in FLAVORS:
-        raise ValueError(f"unknown flavor {flavor!r} (known: {', '.join(FLAVORS)})")
-    heading = f"# News digest — {escape(digest.get('date'))}"
-    lines: list[str] = [heading if flavor == MARKDOWN else f"**{heading[2:]}**", ""]
-
-    if digest.get("natural_language_summary"):
-        lines.append(escape(digest["natural_language_summary"]))
-        lines.append("")
-
-    counts = (digest.get("stats") or {}).get("by_priority") or {}
-    must = counts.get("must_read", 0)
-    lines.append(
-        f"*{must} must-read of {digest.get('items_total', 0)} scored "
-        f"({digest.get('profile')} profile).*"
-    )
-    lines.append("")
-
-    for section in digest.get("sections") or []:
-        render_section(section, lines, flavor)
-
-    while lines and not lines[-1]:
-        lines.pop()
-    return "\n".join(lines) + "\n"
+    return "\n\n".join(render_blocks(digest, flavor)) + "\n"
 
 
 def main() -> int:

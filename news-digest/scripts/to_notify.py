@@ -10,8 +10,9 @@ a destination, not a transport, and the agent resolves one at run time from
 whatever it can reach. Taking that split as a constraint is what keeps this
 tool from depending on a particular local CLI or MCP server.
 
-The text is the same text `compile.py` writes to the corpus, split at the
-largest structural boundary that fits, so a message never begins mid-item.
+The text is rendered by `compile.py` for the destination's dialect and split
+on the block boundaries that renderer states, so a message never begins in the
+middle of an article.
 
 Standard library only.
 """
@@ -37,64 +38,52 @@ DEFAULT_LIMIT = 3800
 CONTINUED = "*(continued)*"
 
 
-def split_markdown(text: str, limit: int, continued: str = CONTINUED) -> list[str]:
-    """Split at the largest boundary that fits: sections, then items, then lines.
+def split_blocks(blocks: list[str], limit: int, continued: str = CONTINUED) -> list[str]:
+    """Pack rendered blocks into messages the destination will accept.
 
-    Returns parts that already carry the continuation marker, so "every part
-    is within the limit" is a property of the result rather than something the
-    caller has to preserve. Adding the marker afterwards is what pushed a real
-    message seven characters over.
+    Blocks come from `compile.render_blocks`, so an item is never cut in half:
+    the renderer states the boundaries rather than the splitter recovering them
+    from markup, which is what broke the moment a second flavour spelled its
+    headings differently.
 
-    Splitting mid-item would produce a message whose first line is a fragment
-    of a headline, which reads as corruption rather than as continuation.
+    Parts already carry the continuation marker, so "every part is within the
+    limit" is a property of the result rather than something the caller has to
+    preserve. Adding the marker afterwards pushed a real message seven
+    characters over.
 
     Character counts, not bytes: the destination limit is expressed in
     characters, and a Japanese digest is roughly three bytes to the character.
     """
-    if not text.strip():
+    blocks = [b for b in blocks if b.strip()]
+    if not blocks:
         return []
-    if len(text) <= limit:
-        return [text]
 
     prefix = f"{continued}\n\n"
     budget = max(1, limit - len(prefix))
 
-    parts: list[str] | None = None
-    for separator in ("\n## ", "\n### ", "\n\n", "\n"):
-        blocks = _blocks(text, separator)
-        if all(len(b) <= budget for b in blocks):
-            parts = _pack(blocks, budget)
-            break
-    if parts is None:
-        # Nothing structural is left, so cut rather than emit a message the
-        # destination will reject.
-        parts = [text[i: i + budget] for i in range(0, len(text), budget)]
-
-    return [parts[0]] + [prefix + p for p in parts[1:]]
-
-
-def _blocks(text: str, separator: str) -> list[str]:
-    parts = text.split(separator)
-    out = [parts[0]]
-    for part in parts[1:]:
-        out.append(separator.lstrip("\n") + part)
-    return [p for p in out if p.strip()]
-
-
-def _pack(blocks: list[str], limit: int) -> list[str]:
-    messages: list[str] = []
-    current = ""
+    # A block that cannot fit at all is cut — better a hard break inside one
+    # item than a message the destination rejects whole.
+    units: list[str] = []
     for block in blocks:
-        candidate = f"{current}\n\n{block}" if current else block
-        if len(candidate) <= limit:
+        if len(block) <= budget:
+            units.append(block)
+        else:
+            units += [block[i: i + budget] for i in range(0, len(block), budget)]
+
+    parts: list[str] = []
+    current = ""
+    for unit in units:
+        candidate = f"{current}\n\n{unit}" if current else unit
+        if len(candidate) <= budget:
             current = candidate
             continue
         if current:
-            messages.append(current)
-        current = block
+            parts.append(current)
+        current = unit
     if current:
-        messages.append(current)
-    return messages
+        parts.append(current)
+
+    return [parts[0]] + [prefix + p for p in parts[1:]]
 
 
 def limit_for(kind: str) -> int:
@@ -129,7 +118,7 @@ def main() -> int:
     # a real digest its links.
     flavor = args.flavor or (compile_mod.SLACK if kind == "slack" else compile_mod.MARKDOWN)
 
-    messages = split_markdown(compile_mod.render(digest, flavor), limit)
+    messages = split_blocks(compile_mod.render_blocks(digest, flavor), limit)
     args.out_prefix.parent.mkdir(parents=True, exist_ok=True)
 
     # Clear parts left by an earlier invocation. The caller sends msg-01,

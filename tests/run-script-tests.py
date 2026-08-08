@@ -2572,66 +2572,63 @@ class TestBuildDigestInputHandling(unittest.TestCase):
 # ────────────────────────────────────────────────────────────────
 
 
-class TestSplitMarkdown(unittest.TestCase):
+class TestSplitBlocks(unittest.TestCase):
+    """Blocks come from the renderer, so an item is never cut in half."""
+
+    def _item_blocks(self, n, size=200):
+        return [f"**Headline number {i}**\n\nhttps://example.com/{i}\n\n{'body ' * size}"
+                for i in range(n)]
+
     def test_short_text_is_one_message(self):
-        self.assertEqual(to_notify.split_markdown("# Digest\n\nShort.", 3800), ["# Digest\n\nShort."])
+        self.assertEqual(to_notify.split_blocks(["# Digest", "Short."], 3800),
+                         ["# Digest\n\nShort."])
 
-    def test_empty_text_produces_nothing(self):
-        self.assertEqual(to_notify.split_markdown("   ", 3800), [])
+    def test_no_blocks_produce_nothing(self):
+        self.assertEqual(to_notify.split_blocks([], 3800), [])
+        self.assertEqual(to_notify.split_blocks(["   ", ""], 3800), [])
 
-    def test_splits_at_section_boundaries(self):
-        text = "# D\n\n" + "".join(f"## Section {i}\n\n{'x' * 400}\n\n" for i in range(5))
-        parts = to_notify.split_markdown(text, 1000)
-        self.assertGreater(len(parts), 1)
-        for part in parts[1:]:
-            body = part[len(to_notify.CONTINUED):].lstrip()
-            self.assertTrue(body.startswith("##"))
-
-    def test_never_begins_mid_item(self):
+    def test_a_block_is_never_split_when_it_fits(self):
         """A message opening with a fragment of a headline reads as
-        corruption, not as continuation."""
-        text = "# D\n\n## Must read\n\n" + "".join(
-            f"### Headline number {i}\n\n{'body ' * 60}\n\n" for i in range(6)
-        )
-        for part in to_notify.split_markdown(text, 900)[1:]:
-            body = part[len(to_notify.CONTINUED):].lstrip()
-            self.assertTrue(body.startswith(("#", "*")), body[:40])
+        corruption, not as continuation. Recovering boundaries from markup
+        broke the moment a second flavour spelled its headings differently."""
+        blocks = self._item_blocks(8, size=40)
+        parts = to_notify.split_blocks(blocks, 900)
+        self.assertGreater(len(parts), 1)
+        for block in blocks:
+            self.assertTrue(any(block in part for part in parts), block[:30])
 
     def test_every_part_is_within_the_limit_marker_included(self):
-        """The marker used to be added after the split, which pushed a real
-        message seven characters over."""
-        text = "# D\n\n" + "".join(f"### Item {i}\n\n{'x' * 200}\n\n" for i in range(40))
+        blocks = self._item_blocks(20, size=20)
         for limit in (400, 700, 1000):
-            for part in to_notify.split_markdown(text, limit):
+            for part in to_notify.split_blocks(blocks, limit):
                 self.assertLessEqual(len(part), limit, f"limit {limit}")
 
     def test_a_multibyte_digest_is_measured_in_characters(self):
         """A Japanese digest is about three bytes to the character; measuring
         bytes would split it into three times as many messages."""
-        text = "# ダイジェスト\n\n" + "".join(f"## 見出し{i}\n\n{'あ' * 200}\n\n" for i in range(10))
-        parts = to_notify.split_markdown(text, 1000)
+        blocks = [f"**見出し{i}**\n\n{'あ' * 200}" for i in range(10)]
+        parts = to_notify.split_blocks(blocks, 1000)
         for part in parts:
             self.assertLessEqual(len(part), 1000)
         self.assertLess(len(parts), 8)
 
     def test_continuation_parts_are_marked(self):
-        text = "# D\n\n" + "".join(f"## S{i}\n\n{'x' * 400}\n\n" for i in range(5))
-        parts = to_notify.split_markdown(text, 1000)
+        parts = to_notify.split_blocks(self._item_blocks(10, size=40), 1000)
         self.assertGreater(len(parts), 1)
         self.assertFalse(parts[0].startswith(to_notify.CONTINUED))
         for part in parts[1:]:
             self.assertTrue(part.startswith(to_notify.CONTINUED))
 
-    def test_an_unbreakable_block_is_cut_rather_than_rejected(self):
-        parts = to_notify.split_markdown("x" * 5000, 1000)
+    def test_an_oversized_block_is_cut_rather_than_rejected(self):
+        parts = to_notify.split_blocks(["x" * 5000], 1000)
         self.assertTrue(all(len(p) <= 1000 for p in parts))
         prefix = f"{to_notify.CONTINUED}\n\n"
         rejoined = parts[0] + "".join(p[len(prefix):] for p in parts[1:])
         self.assertEqual(rejoined, "x" * 5000)
 
     def test_nothing_is_lost_in_the_split(self):
-        text = "# D\n\n" + "".join(f"## S{i}\n\nbody{i}\n\n" for i in range(10))
-        joined = "".join(to_notify.split_markdown(text, 200))
+        blocks = [f"**S{i}**\n\nbody{i}" for i in range(10)]
+        joined = "".join(to_notify.split_blocks(blocks, 200))
         for i in range(10):
             self.assertIn(f"body{i}", joined)
 
@@ -2640,6 +2637,57 @@ class TestSplitMarkdown(unittest.TestCase):
 
     def test_an_unknown_kind_falls_back_to_the_conservative_limit(self):
         self.assertEqual(to_notify.limit_for("carrier-pigeon"), to_notify.DEFAULT_LIMIT)
+
+
+class TestDeliveryKeepsItemsWhole(unittest.TestCase):
+    """End to end over the real renderer, for every flavour."""
+
+    def _digest(self, n):
+        return {
+            "date": "2026-08-08", "profile": "generic", "items_total": n,
+            "natural_language_summary": "A day.",
+            "stats": {"by_priority": {"skim": n}},
+            "sections": [{
+                "id": "skim", "title": "Skim", "kind": "items", "withheld": 0,
+                "items": [{
+                    "id": f"sha1:{i}", "title": f"Headline number {i}",
+                    "url": f"https://example.com/{i}", "source": "Alpha",
+                    "published_at": "2026-08-08T00:00:00+00:00", "priority": "skim",
+                    "axes": {"novelty": 3}, "credibility": "primary",
+                    "why": "A named fact. " * 10, "summary": None, "deep_read": False,
+                } for i in range(n)],
+            }],
+        }
+
+    def test_no_message_begins_mid_article_in_any_flavor(self):
+        digest = self._digest(12)
+        for flavor in compile_mod.FLAVORS:
+            blocks = compile_mod.render_blocks(digest, flavor)
+            parts = to_notify.split_blocks(blocks, 1200)
+            self.assertGreater(len(parts), 1, flavor)
+            for block in blocks:
+                with self.subTest(flavor=flavor, block=block[:30]):
+                    self.assertTrue(any(block in part for part in parts))
+
+    def test_no_message_ends_on_an_orphaned_section_heading(self):
+        """A part closing with 'Skim (5)' and nothing under it announces a
+        section the reader has to go looking for."""
+        digest = self._digest(12)
+        for flavor in compile_mod.FLAVORS:
+            for part in to_notify.split_blocks(
+                compile_mod.render_blocks(digest, flavor), 1200
+            ):
+                last = [line for line in part.splitlines() if line.strip()][-1]
+                with self.subTest(flavor=flavor):
+                    self.assertNotIn("Skim (12)", last)
+
+    def test_every_url_survives_delivery_in_any_flavor(self):
+        digest = self._digest(12)
+        for flavor in compile_mod.FLAVORS:
+            joined = "".join(to_notify.split_blocks(
+                compile_mod.render_blocks(digest, flavor), 1200))
+            for i in range(12):
+                self.assertIn(f"https://example.com/{i}", joined, flavor)
 
 
 class TestToNotifyOutput(unittest.TestCase):
