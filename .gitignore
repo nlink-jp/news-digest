@@ -1,0 +1,8 @@
+dist/
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Phase 1 planning artifact. The public record of the design is
+# docs/{en,ja}/adr/0001-*; shipping both would create two sources of truth.
+docs/design/
