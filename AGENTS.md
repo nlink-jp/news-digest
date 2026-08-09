@@ -33,7 +33,11 @@ Python 3.11+, standard library only. No service, no database, no credentials.
 news-digest/            The skill — the only thing `make package` ships
 ├── SKILL.md            Phase 0–9 pipeline; frontmatter name must equal the directory
 ├── references/
-│   └── data-model.md   Record shapes, identity rule, re-analysis queries
+│   ├── data-model.md   Record shapes, identity rule, re-analysis queries
+│   ├── setting-up-a-corpus.md   Agent-runnable setup runbook; the interview
+│   │                   step marks what only the user can decide
+│   └── scheduled-operation.md   Unattended-run contract, schedule recipes,
+│                       diagnosis order when digests stop arriving
 ├── examples/corpus/    Ready-to-copy corpus template (placeholders only)
 ├── scripts/lib/        corpus (contract + version gate), profile (axes,
 │                       extends chain, decision table), records (identity),

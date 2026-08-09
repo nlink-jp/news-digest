@@ -89,7 +89,9 @@ make install
 | `--no-post` / `--no-commit` | — | 個別に抑止 |
 
 コピーして使えるコーパスの雛形が `news-digest/examples/corpus/` にある。
-手順は `news-digest/references/setting-up-a-corpus.md`。
+`news-digest/references/setting-up-a-corpus.md` はエージェントが一緒に実行できる
+runbook で、関心・フィード・送り先を答えるのは利用者、残りの作業はエージェントの
+分担。毎朝の定期実行にするには `news-digest/references/scheduled-operation.md`。
 
 ## 必要なもの
 

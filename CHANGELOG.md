@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `references/scheduled-operation.md`. Scheduled execution was how the skill
+  was actually operated, and nothing in the repository described it — the
+  knowledge lived outside, so a new machine, a second corpus, or another user
+  stopped exactly there. The file states the contract an unattended run
+  relies on (skill by name, corpus by absolute path, non-interactive push, a
+  reachable messaging tool), gives recipes for an app scheduled task and for
+  cron, and orders the diagnosis when the digest stops arriving: transcript,
+  then corpus log, then the schedule itself.
+
+### Changed
+
+- `references/setting-up-a-corpus.md` is now a runbook an agent can execute
+  end-to-end, with the autonomy boundary stated first: the decisions only the
+  user can make (interests, feeds, profile, destination, location) are
+  collected in an explicit interview step, and everything after is mechanics.
+  It also covers what the previous text skipped — editing `.newsrc.toml`
+  itself (the profile and the notify destination were steps with no step),
+  creating the private remote and verifying the visibility actually is
+  `PRIVATE` rather than assuming it, and a supervised `--dry-run` first run
+  as the gate before scheduling.
+- The skill description and Phase 0 routing now name first-time setup and
+  scheduling, so a setup request triggers the skill instead of stopping at
+  "no corpus found".
+
 ## [0.2.1] - 2026-08-08
 
 ### Changed

@@ -97,8 +97,11 @@ users. `make install DEST=/path/to/skills` installs elsewhere;
 | `--dry-run` | — | Neither notify nor commit |
 | `--no-post` / `--no-commit` | — | Suppress one or the other |
 
-A ready-to-copy corpus template is in `news-digest/examples/corpus/`; see
-`news-digest/references/setting-up-a-corpus.md`.
+A ready-to-copy corpus template is in `news-digest/examples/corpus/`.
+`news-digest/references/setting-up-a-corpus.md` is a runbook the agent can
+follow with you — the interests, feeds, and destination are yours to state;
+the mechanics are not. `news-digest/references/scheduled-operation.md` covers
+making the run recur every morning.
 
 ## Requirements
 

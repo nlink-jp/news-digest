@@ -1,6 +1,6 @@
 ---
 name: news-digest
-description: Collect your own RSS/Atom/JSON feeds, score each article on novelty, significance and relevance, derive a reading priority from a profile's decision table, and compile a digest of only what is worth reading — tracking continuing stories so a genuinely new event is distinguished from a rehash with no new facts. Articles are kept with their origin and the reason they were dropped, in a separate private corpus repository that can be re-analysed later. Use for news collection routines, フィード購読の整理, 毎朝のダイジェスト, セキュリティニュースのまとめ, 情報収集の自動化.
+description: Collect your own RSS/Atom/JSON feeds, score each article on novelty, significance and relevance, derive a reading priority from a profile's decision table, and compile a digest of only what is worth reading — tracking continuing stories so a genuinely new event is distinguished from a rehash with no new facts. Articles are kept with their origin and the reason they were dropped, in a separate private corpus repository that can be re-analysed later. Use for news collection routines, フィード購読の整理, 毎朝のダイジェスト, セキュリティニュースのまとめ, 情報収集の自動化 — and for first-time setup: creating a corpus repository and scheduling the daily run, コーパスの初期セットアップ, 定期実行の設定.
 argument-hint: "[--repo <path>] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--source <id>] [--dry-run] [--no-post] [--no-commit]"
 allowed-tools: Read Write Edit WebFetch Bash(python3 *) Bash(git *) Bash(mkdir *) Bash(ls *) Bash(cat *) Bash(jq *) Bash(rm -rf .news-digest-work*)
 ---
@@ -41,8 +41,11 @@ Everything except steps 3 and 5 is deterministic. When the wording of the
 output is wrong, fix `compile.py` — do not re-render by hand.
 
 Record shapes are documented in [references/data-model.md](references/data-model.md).
-If the user has no corpus yet, [references/setting-up-a-corpus.md](references/setting-up-a-corpus.md)
-describes how to create one from the template in `examples/corpus/`.
+If the user has no corpus yet, follow
+[references/setting-up-a-corpus.md](references/setting-up-a-corpus.md) — a
+runbook, not background reading: it states which decisions to ask the user
+for and runs the rest. To make the run recur unattended, follow
+[references/scheduled-operation.md](references/scheduled-operation.md).
 
 ## Arguments
 
