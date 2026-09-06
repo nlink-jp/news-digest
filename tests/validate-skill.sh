@@ -44,6 +44,16 @@ for skill_md in $skills; do
 
 	[ -n "$name" ] || err "$skill: frontmatter has no name:"
 	[ -n "$description" ] || err "$skill: frontmatter has no description:"
+	# claude.ai and the desktop app refuse a SKILL.md whose description is
+	# longer than 1024 characters — at upload time, after the release has
+	# shipped. Characters, not bytes: UTF-8 continuation bytes are dropped
+	# before counting so the result does not depend on the locale.
+	if [ -n "$description" ]; then
+		desc_chars=$(printf '%s' "$description" | LC_ALL=C tr -d '\200-\277' | LC_ALL=C wc -c | tr -d ' ')
+		if [ "$desc_chars" -gt 1024 ]; then
+			err "$skill: description is $desc_chars characters; claude.ai and the desktop app refuse more than 1024"
+		fi
+	fi
 	if [ -n "$name" ] && [ "$name" != "$skill" ]; then
 		err "$skill: frontmatter name '$name' does not match the directory name (the directory name is the slash command)"
 	fi
